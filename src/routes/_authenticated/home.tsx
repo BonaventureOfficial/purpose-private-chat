@@ -5,6 +5,7 @@ import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { Logo } from "@/components/purpose/Logo";
 import { supabase } from "@/integrations/supabase/client";
 import { BACKGROUNDS } from "@/lib/purpose";
+import { getMyProfile } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/home")({
@@ -25,12 +26,15 @@ function HomePage() {
   const [q, setQ] = useState("");
   const [me, setMe] = useState<string | null>(null);
 
+  const [avatar, setAvatar] = useState<string | null>(null);
+
   useEffect(() => {
     void supabase.auth.getUser().then((res) => {
       const user = res.data.user;
       const meta = user?.user_metadata as { username?: string } | undefined;
       setMe(meta?.username ?? user?.email?.split("@")[0] ?? null);
     });
+    void getMyProfile().then((p) => setAvatar(p?.avatar_url ?? null));
   }, []);
 
   const visible = me && me.toLowerCase().includes(q.toLowerCase());
@@ -72,9 +76,13 @@ function HomePage() {
         {visible && (
           <li className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5">
             <div className="relative">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
-                {me![0]?.toUpperCase()}
-              </div>
+              {avatar ? (
+                <img src={avatar} alt={me!} className="h-16 w-16 rounded-full object-cover" />
+              ) : (
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
+                  {me![0]?.toUpperCase()}
+                </div>
+              )}
               <span className="absolute bottom-0.5 right-0.5 h-4 w-4 rounded-full bg-online ring-2 ring-background animate-pulse" aria-label="Online" />
             </div>
             <div className="min-w-0 flex-1">
