@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Palette, Search } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { Logo } from "@/components/purpose/Logo";
-import { BACKGROUNDS, CONTACTS } from "@/lib/purpose";
+import { supabase } from "@/integrations/supabase/client";
+import { BACKGROUNDS } from "@/lib/purpose";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/home")({
@@ -22,7 +23,17 @@ function HomePage() {
   const [bg, setBg] = useBackground();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const list = CONTACTS.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()));
+  const [me, setMe] = useState<string | null>(null);
+
+  useEffect(() => {
+    void supabase.auth.getUser().then((res) => {
+      const user = res.data.user;
+      const meta = user?.user_metadata as { username?: string } | undefined;
+      setMe(meta?.username ?? user?.email?.split("@")[0] ?? null);
+    });
+  }, []);
+
+  const visible = me && me.toLowerCase().includes(q.toLowerCase());
 
   const header = (
     <div className="mx-auto max-w-2xl px-4 pb-3 pt-3">
@@ -57,29 +68,22 @@ function HomePage() {
 
   return (
     <AppShell header={header} bg={bg}>
-      <ul className="mx-auto max-w-2xl divide-y divide-border/60 px-2 py-2">
-        {list.map((c) => (
-          <li key={c.id} className="flex items-center gap-3 rounded-xl px-3 py-3 hover:bg-foreground/5">
+      <ul className="mx-auto max-w-2xl px-2 py-2">
+        {visible && (
+          <li className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5">
             <div className="relative">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 font-semibold text-primary">
-                {c.name.split(" ").map((n) => n[0]).join("")}
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
+                {me![0]?.toUpperCase()}
               </div>
-              <span className={cn("absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full ring-2 ring-background animate-pulse", c.online ? "bg-online" : "bg-offline")}
-                aria-label={c.online ? "Online" : "Offline"} />
+              <span className="absolute bottom-0.5 right-0.5 h-4 w-4 rounded-full bg-online ring-2 ring-background animate-pulse" aria-label="Online" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="truncate font-semibold text-foreground">{c.name}</p>
-                <span className="shrink-0 text-xs text-muted-foreground">{c.time}</span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm text-muted-foreground">{c.last}</p>
-                {c.unread > 0 && <span className="rounded-full bg-primary px-2 text-xs font-semibold text-primary-foreground">{c.unread}</span>}
-              </div>
+              <p className="truncate text-base font-semibold text-foreground">{me} (You)</p>
+              <p className="truncate text-sm text-muted-foreground">Your account</p>
             </div>
           </li>
-        ))}
-        {list.length === 0 && <li className="py-10 text-center text-sm text-muted-foreground">No chats found</li>}
+        )}
+        {me && !visible && <li className="py-10 text-center text-sm text-muted-foreground">No chats found</li>}
       </ul>
     </AppShell>
   );
