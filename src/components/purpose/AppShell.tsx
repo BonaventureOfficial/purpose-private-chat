@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { BACKGROUNDS } from "@/lib/purpose";
 
 export function useBackground() {
-  const [bg, setBg] = useState(BACKGROUNDS[0].value);
+  const [bg, setBg] = useState<string>(BACKGROUNDS[0]!.value);
   useEffect(() => {
     const s = localStorage.getItem("purpose-bg");
     if (s) setBg(s);
