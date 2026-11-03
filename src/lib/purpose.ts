@@ -54,19 +54,3 @@ export const BACKGROUNDS = [
   { name: "Sage", value: "oklch(0.92 0.03 140)" },
 ];
 
-export type Contact = { id: number; name: string; last: string; time: string; online: boolean; unread: number };
-
-export const CONTACTS: Contact[] = [
-  ["Amara Diallo", "See you tomorrow at the meeting 👋", "09:42", true, 2],
-  ["Lucas Martin", "I sent you the documents", "09:15", false, 0],
-  ["Sofia Rossi", "Haha that's perfect 😂", "08:57", true, 5],
-  ["Kwame Mensah", "Can we call later?", "Yesterday", true, 0],
-  ["Emma Johnson", "Thanks for your help!", "Yesterday", false, 0],
-  ["Yuki Tanaka", "The photos look amazing", "Yesterday", true, 1],
-  ["Omar Haddad", "On my way 🚗", "Mon", false, 0],
-  ["Léa Dubois", "Did you see the news?", "Mon", true, 0],
-  ["Daniel Okafor", "Let's do it 💪", "Sun", false, 3],
-  ["Nina Petrova", "Happy birthday! 🎉", "Sun", true, 0],
-  ["Carlos Silva", "Voice message", "Sat", false, 0],
-  ["Fatou Ndiaye", "Okay, noted.", "Fri", true, 0],
-].map(([name, last, time, online, unread], i) => ({ id: i + 1, name, last, time, online, unread }) as Contact);
