@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { Logo } from "@/components/purpose/Logo";
 
-export const Route = createFileRoute("/mypurpose")({
+export const Route = createFileRoute("/_authenticated/mypurpose")({
   head: () => ({
     meta: [
       { title: "MyPurpose — Purpose" },

@@ -1,8 +1,11 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Check, Eye, EyeOff, Lock, MessageCircle, Shield, Star, Heart, Send, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { Logo } from "./Logo";
-import { isStrongPassword, passwordChecks } from "@/lib/purpose";
+import { isStrongPassword, passwordChecks, syntheticEmail, validateUsername } from "@/lib/purpose";
+import { signUpWithUsername } from "@/lib/auth.functions";
+import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 
 const FLOATERS = [
@@ -16,27 +19,62 @@ const FLOATERS = [
 
 export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
   const nav = useNavigate();
+  const signUpFn = useServerFn(signUpWithUsername);
   const [name, setName] = useState("");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
   const checks = passwordChecks(pw);
 
-  function submit(e: React.FormEvent) {
+  // The old simulated account (stored on the device) is no longer used.
+  useEffect(() => {
+    localStorage.removeItem("purpose-account");
+  }, []);
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setError("");
     const u = name.trim();
-    if (u.length < 3) return setError("User name must be at least 3 characters.");
-    if (mode === "signup") {
-      if (!isStrongPassword(pw)) return setError("Password does not meet all requirements.");
-      localStorage.setItem("purpose-account", JSON.stringify({ name: u, pw }));
-      setSuccess(true);
-      setTimeout(() => nav({ to: "/home" }), 1400);
-    } else {
-      const acc = JSON.parse(localStorage.getItem("purpose-account") || "null");
-      if (!acc || acc.name !== u || acc.pw !== pw) return setError("Wrong user name or password.");
-      nav({ to: "/home" });
+    const invalid = validateUsername(u);
+    if (invalid) return setError(invalid);
+
+    setBusy(true);
+    try {
+      if (mode === "signup") {
+        if (!isStrongPassword(pw)) {
+          setBusy(false);
+          return setError("Password does not meet all requirements.");
+        }
+        const res = await signUpFn({ data: { username: u, password: pw } });
+        if (!res.ok) {
+          setBusy(false);
+          return setError(res.error);
+        }
+        const { error } = await supabase.auth.signInWithPassword({
+          email: syntheticEmail(u),
+          password: pw,
+        });
+        if (error) {
+          setBusy(false);
+          return setError("Account created, but sign-in failed. Please try signing in.");
+        }
+        setSuccess(true);
+        setTimeout(() => nav({ to: "/home" }), 1200);
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: syntheticEmail(u),
+          password: pw,
+        });
+        setBusy(false);
+        if (error) return setError("Wrong user name or password.");
+        nav({ to: "/home" });
+      }
+    } catch {
+      setBusy(false);
+      setError("Something went wrong. Please try again.");
     }
   }
 
@@ -95,8 +133,9 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
               </ul>
             )}
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <button type="submit" className="w-full rounded-xl bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90 active:scale-[0.98]">
-              {mode === "signup" ? "CONFIRM" : "Sign in"}
+            <button type="submit" disabled={busy}
+              className="w-full rounded-xl bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60">
+              {busy ? "PLEASE WAIT…" : mode === "signup" ? "CONFIRM" : "Sign in"}
             </button>
             <p className="text-center text-sm text-muted-foreground">
               {mode === "signup" ? (<>Already have an account? <Link to="/signin" className="font-semibold text-primary">Sign in</Link></>)
