@@ -1,5 +1,5 @@
-import { useNavigate, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { supabase } from "@/integrations/supabase/client";
