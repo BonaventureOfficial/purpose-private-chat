@@ -46,8 +46,7 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
         const Icon = f.t === "logo" ? null : f.t;
         return (
           <div key={i} className="purpose-float pointer-events-none absolute opacity-25" style={{ left: `${f.x}%`, top: `${f.y}%`, animationDelay: `${f.d}s` }}>
-            {Icon ? <Icon className="text-primary" style={{ width: f.s, height: f.s }} /> : <Logo className="" />}
-            {!Icon && <style>{`.purpose-float:nth-child(${i + 1}) img{width:${f.s}px}`}</style>}
+            {Icon ? <Icon className="text-primary" style={{ width: f.s, height: f.s }} /> : <Logo style={{ width: f.s, height: f.s }} />}
           </div>
         );
       })}
