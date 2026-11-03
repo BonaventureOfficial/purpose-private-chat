@@ -23,9 +23,10 @@ function ProfilePage() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      const meta = data.user?.user_metadata as { username?: string } | undefined;
-      setName(meta?.username ?? data.user?.email?.split("@")[0] ?? "Guest");
+    void supabase.auth.getUser().then((res) => {
+      const user = res.data.user;
+      const meta = user?.user_metadata as { username?: string } | undefined;
+      setName(meta?.username ?? user?.email?.split("@")[0] ?? "Guest");
     });
   }, []);
 
