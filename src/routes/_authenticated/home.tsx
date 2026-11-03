@@ -6,7 +6,7 @@ import { Logo } from "@/components/purpose/Logo";
 import { BACKGROUNDS, CONTACTS } from "@/lib/purpose";
 import { cn } from "@/lib/utils";
 
-export const Route = createFileRoute("/home")({
+export const Route = createFileRoute("/_authenticated/home")({
   head: () => ({
     meta: [
       { title: "Chats — Purpose" },

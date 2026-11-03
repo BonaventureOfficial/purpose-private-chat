@@ -14,6 +14,33 @@ export function isStrongPassword(pw: string) {
   return Object.values(passwordChecks(pw)).every(Boolean);
 }
 
+// ---------- Username (real Supabase accounts) ----------
+export const USERNAME_MIN = 3;
+export const USERNAME_MAX = 30;
+export const SIGNUP_EMAIL_DOMAIN = "users.purpose.app";
+
+export function normalizeUsername(u: string) {
+  return u.trim().toLowerCase();
+}
+
+/** Returns an error message when the user name is invalid, or null when it is valid. */
+export function validateUsername(u: string): string | null {
+  const v = u.trim();
+  if (v.length < USERNAME_MIN) return `User name must be at least ${USERNAME_MIN} characters.`;
+  if (v.length > USERNAME_MAX) return `User name must be at most ${USERNAME_MAX} characters.`;
+  if (!/^[A-Za-z0-9_]+$/.test(v)) return "User name can only contain letters, numbers and underscores.";
+  return null;
+}
+
+/**
+ * Accounts are identified by user name only. Supabase Auth needs an email,
+ * so we derive a deterministic, unique synthetic address from the normalized
+ * user name: "Ali", "ali" and "ALI" all resolve to the same account.
+ */
+export function syntheticEmail(username: string) {
+  return `${normalizeUsername(username)}@${SIGNUP_EMAIL_DOMAIN}`;
+}
+
 export const BACKGROUNDS = [
   { name: "White", value: "oklch(1 0 0)" },
   { name: "Cloud", value: "oklch(0.97 0.01 250)" },
