@@ -122,7 +122,7 @@ function RootComponent() {
 
   // Keep the router and query cache in sync with real identity changes only.
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: Parameters<typeof supabase.auth.onAuthStateChange>[0] extends (e: infer E) => void ? E : never) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
       router.invalidate();
       if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
