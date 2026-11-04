@@ -1,8 +1,8 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { ArrowLeft, Lock, SendHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Check, Lock, SendHorizontal } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { MESSAGE_MAX, getProfile, loadThread, markRead, myId, sendMessage, type Message, type PublicProfile } from "@/lib/chat";
+import { MESSAGE_MAX, dateLabel, getProfile, loadThread, markRead, myId, sendMessage, type Message, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/chat/$userId")({
