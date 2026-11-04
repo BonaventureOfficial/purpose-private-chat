@@ -1,11 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { Palette, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { Logo } from "@/components/purpose/Logo";
 import { supabase } from "@/integrations/supabase/client";
 import { BACKGROUNDS } from "@/lib/purpose";
-import { getMyProfile } from "@/lib/media";
+import { listConversations, myId, searchPeople, type Conversation, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/home")({
@@ -15,29 +15,60 @@ export const Route = createFileRoute("/_authenticated/home")({
       { name: "description", content: "Your private Purpose conversations." },
       { property: "og:title", content: "Chats — Purpose" },
       { property: "og:description", content: "Your private Purpose conversations." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
     ],
   }),
   component: HomePage,
 });
+
+function Avatar({ p }: { p: PublicProfile }) {
+  return (
+    <div className="relative shrink-0">
+      {p.avatar_url ? (
+        <img src={p.avatar_url} alt={p.username} className="h-16 w-16 rounded-full object-cover" />
+      ) : (
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
+          {p.username[0]?.toUpperCase()}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function HomePage() {
   const [bg, setBg] = useBackground();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [me, setMe] = useState<string | null>(null);
-
-  const [avatar, setAvatar] = useState<string | null>(null);
+  const [convos, setConvos] = useState<Conversation[] | null>(null);
+  const [people, setPeople] = useState<PublicProfile[]>([]);
 
   useEffect(() => {
-    void supabase.auth.getUser().then((res) => {
-      const user = res.data.user;
-      const meta = user?.user_metadata as { username?: string } | undefined;
-      setMe(meta?.username ?? user?.email?.split("@")[0] ?? null);
+    void myId().then(async (id) => {
+      setMe(id);
+      if (id) setConvos(await listConversations(id));
     });
-    void getMyProfile().then((p) => setAvatar(p?.avatar_url ?? null));
   }, []);
 
-  const visible = me && me.toLowerCase().includes(q.toLowerCase());
+  useEffect(() => {
+    if (!me) return;
+    const channel = supabase
+      .channel(`inbox-${me}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `recipient_id=eq.${me}` },
+        () => { void listConversations(me).then(setConvos); })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [me]);
+
+  useEffect(() => {
+    const t = setTimeout(() => { void searchPeople(q).then(setPeople).catch(() => setPeople([])); }, 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const filtered = (convos ?? []).filter((c) => c.partner.username.toLowerCase().includes(q.trim().toLowerCase()));
+  const known = new Set(filtered.map((c) => c.partner.id));
+  const newPeople = people.filter((p) => !known.has(p.id));
 
   const header = (
     <div className="mx-auto max-w-2xl px-4 pb-3 pt-3">
@@ -64,7 +95,7 @@ function HomePage() {
       </div>
       <div className="relative mt-3">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats"
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats or find people by user name"
           className="w-full rounded-full border border-input bg-background py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-ring" />
       </div>
     </div>
@@ -73,25 +104,43 @@ function HomePage() {
   return (
     <AppShell header={header} bg={bg}>
       <ul className="mx-auto max-w-2xl px-2 py-2">
-        {visible && (
-          <li className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5">
-            <div className="relative">
-              {avatar ? (
-                <img src={avatar} alt={me!} className="h-16 w-16 rounded-full object-cover" />
-              ) : (
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
-                  {me![0]?.toUpperCase()}
-                </div>
+        {filtered.map((c) => (
+          <li key={c.partner.id}>
+            <Link to="/chat/$userId" params={{ userId: c.partner.id }}
+              className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5">
+              <Avatar p={c.partner} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-base font-semibold text-foreground">{c.partner.username}</p>
+                <p className={cn("truncate text-sm", c.unread ? "font-semibold text-foreground" : "text-muted-foreground")}>
+                  {c.last.sender_id === me ? "You: " : ""}{c.last.body}
+                </p>
+              </div>
+              {c.unread > 0 && (
+                <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">{c.unread}</span>
               )}
-              <span className="absolute bottom-0.5 right-0.5 h-4 w-4 rounded-full bg-online ring-2 ring-background animate-pulse" aria-label="Online" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-base font-semibold text-foreground">{me} (You)</p>
-              <p className="truncate text-sm text-muted-foreground">Your account</p>
-            </div>
+            </Link>
+          </li>
+        ))}
+        {newPeople.length > 0 && (
+          <li className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">People</li>
+        )}
+        {newPeople.map((p) => (
+          <li key={p.id}>
+            <Link to="/chat/$userId" params={{ userId: p.id }}
+              className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5">
+              <Avatar p={p} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-base font-semibold text-foreground">{p.username}</p>
+                <p className="truncate text-sm text-muted-foreground">Start a conversation</p>
+              </div>
+            </Link>
+          </li>
+        ))}
+        {convos && filtered.length === 0 && newPeople.length === 0 && (
+          <li className="py-10 text-center text-sm text-muted-foreground">
+            {q.trim() ? "No one found" : "No chats yet. Search a user name above to start chatting."}
           </li>
         )}
-        {me && !visible && <li className="py-10 text-center text-sm text-muted-foreground">No chats found</li>}
       </ul>
     </AppShell>
   );
