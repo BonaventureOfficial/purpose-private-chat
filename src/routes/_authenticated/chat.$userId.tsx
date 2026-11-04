@@ -23,6 +23,18 @@ function time(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Delivery ticks: dark red single check while sending, white double check when delivered, dark green double check when read. */
+function Ticks({ sending, read }: { sending: boolean; read: boolean }) {
+  if (sending) return <Check className="h-3.5 w-3.5 text-destructive" aria-label="Sending" />;
+  const color = read ? "text-online" : "text-primary-foreground";
+  return (
+    <span className="inline-flex items-center" aria-label={read ? "Read" : "Delivered"}>
+      <Check className={cn("h-3.5 w-3.5", color)} />
+      <Check className={cn("-ml-2.5 h-3.5 w-3.5", color)} />
+    </span>
+  );
+}
+
 function ChatPage() {
   const { userId } = Route.useParams();
   const [me, setMe] = useState<string | null>(null);
@@ -31,6 +43,7 @@ function ChatPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [pending, setPending] = useState<Message[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,6 +70,12 @@ function ChatPage() {
           if (m.sender_id !== userId) return;
           setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
           void markRead(me, userId);
+        })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: `sender_id=eq.${me}` },
+        (payload) => {
+          const m = payload.new as Message;
+          if (m.recipient_id !== userId) return;
+          setMsgs((prev) => prev.map((x) => (x.id === m.id ? { ...x, read_at: m.read_at } : x)));
         })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
