@@ -13,6 +13,19 @@ export type Conversation = { partner: PublicProfile; last: Message; unread: numb
 
 export const MESSAGE_MAX = 4000;
 
+/** Grouping label for a message date: Today, Yesterday, weekday (2-6 days), Last week, then month + year. */
+export function dateLabel(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days <= 6) return d.toLocaleDateString([], { weekday: "long" });
+  if (days <= 13) return "Last week";
+  return d.toLocaleDateString([], { month: "long", year: "numeric" });
+}
+
 export async function myId() {
   const { data } = await supabase.auth.getUser();
   return data.user?.id ?? null;
