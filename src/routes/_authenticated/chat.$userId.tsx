@@ -92,12 +92,25 @@ function ChatPage() {
 
   async function send() {
     if (!me || !text.trim() || sending) return;
+    const body = text;
+    const optimistic: Message = {
+      id: `pending-${Date.now()}`,
+      sender_id: me,
+      recipient_id: userId,
+      body,
+      created_at: new Date().toISOString(),
+      read_at: null,
+    };
     setSending(true); setErr(null);
+    setPending((p) => [...p, optimistic]);
+    setText("");
     try {
-      const m = await sendMessage(me, userId, text);
-      setMsgs((prev) => [...prev, m]);
-      setText("");
+      const m = await sendMessage(me, userId, body);
+      setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+      setPending((p) => p.filter((x) => x.id !== optimistic.id));
     } catch (e) {
+      setPending((p) => p.filter((x) => x.id !== optimistic.id));
+      setText(body);
       setErr(e instanceof Error ? e.message : "Could not send.");
     } finally {
       setSending(false);
