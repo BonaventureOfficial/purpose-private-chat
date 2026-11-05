@@ -81,7 +81,7 @@ function ChatPage() {
     return () => { void supabase.removeChannel(channel); };
   }, [me, userId]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length, pending.length]);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -92,12 +92,25 @@ function ChatPage() {
 
   async function send() {
     if (!me || !text.trim() || sending) return;
+    const body = text;
+    const optimistic: Message = {
+      id: `pending-${Date.now()}`,
+      sender_id: me,
+      recipient_id: userId,
+      body,
+      created_at: new Date().toISOString(),
+      read_at: null,
+    };
     setSending(true); setErr(null);
+    setPending((p) => [...p, optimistic]);
+    setText("");
     try {
-      const m = await sendMessage(me, userId, text);
-      setMsgs((prev) => [...prev, m]);
-      setText("");
+      const m = await sendMessage(me, userId, body);
+      setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+      setPending((p) => p.filter((x) => x.id !== optimistic.id));
     } catch (e) {
+      setPending((p) => p.filter((x) => x.id !== optimistic.id));
+      setText(body);
       setErr(e instanceof Error ? e.message : "Could not send.");
     } finally {
       setSending(false);
@@ -106,6 +119,7 @@ function ChatPage() {
   }
 
   const name = other?.username ?? "…";
+  const display = [...msgs, ...pending];
 
   return (
     <div className="flex h-dvh flex-col bg-secondary/40">
@@ -128,23 +142,36 @@ function ChatPage() {
 
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-2xl flex-col gap-1.5 px-3 py-4">
-          {msgs.length === 0 && (
+          {display.length === 0 && (
             <p className="py-10 text-center text-sm text-muted-foreground">Say hello to {name} 👋</p>
           )}
-          {msgs.map((m) => {
+          {display.map((m, i) => {
             const mine = m.sender_id === me;
+            const label = dateLabel(m.created_at);
+            const prevLabel = i > 0 ? dateLabel(display[i - 1]!.created_at) : null;
+            const isPending = m.id.startsWith("pending-");
             return (
-              <div key={m.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
-                <div className={cn(
-                  "max-w-[78%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[15px] shadow-sm",
-                  mine ? "rounded-br-md bg-primary text-primary-foreground" : "rounded-bl-md bg-background text-foreground ring-1 ring-border",
-                )}>
-                  {m.body}
-                  <span className={cn("ml-2 inline-block translate-y-0.5 text-[10px]", mine ? "text-primary-foreground/70" : "text-muted-foreground")}>
-                    {time(m.created_at)}{mine && (m.read_at ? " ✓✓" : " ✓")}
-                  </span>
+              <Fragment key={m.id}>
+                {label !== prevLabel && (
+                  <div className="flex justify-center py-2">
+                    <span className="rounded-full bg-background px-3 py-1 text-xs font-medium text-muted-foreground ring-1 ring-border">
+                      {label}
+                    </span>
+                  </div>
+                )}
+                <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
+                  <div className={cn(
+                    "max-w-[78%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[15px] shadow-sm",
+                    mine ? "rounded-br-md bg-primary text-primary-foreground" : "rounded-bl-md bg-background text-foreground ring-1 ring-border",
+                  )}>
+                    {m.body}
+                    <span className={cn("ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10px]", mine ? "text-primary-foreground/70" : "text-muted-foreground")}>
+                      {time(m.created_at)}
+                      {mine && <Ticks sending={isPending} read={!isPending && !!m.read_at} />}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              </Fragment>
             );
           })}
           <div ref={endRef} />
