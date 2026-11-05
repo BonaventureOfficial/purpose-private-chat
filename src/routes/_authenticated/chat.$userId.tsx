@@ -148,7 +148,7 @@ function ChatPage() {
           {display.map((m, i) => {
             const mine = m.sender_id === me;
             const label = dateLabel(m.created_at);
-            const prevLabel = i > 0 ? dateLabel(display[i - 1].created_at) : null;
+            const prevLabel = i > 0 ? dateLabel(display[i - 1]!.created_at) : null;
             const isPending = m.id.startsWith("pending-");
             return (
               <Fragment key={m.id}>
