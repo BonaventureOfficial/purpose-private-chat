@@ -112,7 +112,7 @@ function HomePage() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-base font-semibold text-foreground">{c.partner.username}</p>
                 <p className={cn("truncate text-sm", c.unread ? "font-semibold text-foreground" : "text-muted-foreground")}>
-                  {c.last.sender_id === me ? "You: " : ""}{c.last.body}
+                  {c.last.deleted_at ? <em>Message deleted</em> : <>{c.last.sender_id === me ? "You: " : ""}{c.last.body}</>}
                 </p>
               </div>
               {c.unread > 0 && (
