@@ -264,7 +264,7 @@ function ChatPage() {
             <div className="mb-2 flex items-center gap-2 rounded-xl border-l-4 border-primary bg-secondary px-3 py-1.5 text-xs">
               {editing ? <Pencil className="h-3.5 w-3.5 text-primary" /> : <CornerUpLeft className="h-3.5 w-3.5 text-primary" />}
               <div className="min-w-0 flex-1">
-                <p className="font-semibold text-primary">{editing ? "Editing message" : "Replying to yourself"}</p>
+                <p className="font-semibold text-primary">{editing ? "Editing message" : "Replying to your message"}</p>
                 <p className="truncate text-muted-foreground">{(editing ?? replyTo)!.body}</p>
               </div>
               <button aria-label="Cancel" onClick={() => { if (editing) setText(""); setEditing(null); setReplyTo(null); }} className="rounded-full p-1 hover:bg-background">
