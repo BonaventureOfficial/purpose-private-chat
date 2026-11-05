@@ -81,7 +81,7 @@ function ChatPage() {
     return () => { void supabase.removeChannel(channel); };
   }, [me, userId]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length, pending.length]);
 
   useEffect(() => {
     const ta = taRef.current;
