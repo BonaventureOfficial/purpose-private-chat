@@ -8,10 +8,20 @@ export type Message = {
   body: string;
   created_at: string;
   read_at: string | null;
+  edited_at: string | null;
+  deleted_at: string | null;
+  recipient_hidden: boolean;
+  reply_to_id: string | null;
 };
 export type Conversation = { partner: PublicProfile; last: Message; unread: number };
 
 export const MESSAGE_MAX = 4000;
+const COLS = "id, sender_id, recipient_id, body, created_at, read_at, edited_at, deleted_at, recipient_hidden, reply_to_id";
+
+/** Hidden for this viewer: the recipient deleted it for themselves. */
+export function isHiddenFor(m: Message, me: string) {
+  return m.recipient_id === me && m.recipient_hidden;
+}
 
 /** Grouping label for a message date: Today, Yesterday, weekday (2-6 days), Last week, then month + year. */
 export function dateLabel(iso: string, now = new Date()): string {
@@ -46,13 +56,13 @@ export async function getProfile(id: string): Promise<PublicProfile | null> {
 export async function listConversations(me: string): Promise<Conversation[]> {
   const { data, error } = await supabase
     .from("messages")
-    .select("id, sender_id, recipient_id, body, created_at, read_at")
+    .select(COLS)
     .or(`sender_id.eq.${me},recipient_id.eq.${me}`)
     .order("created_at", { ascending: false })
     .limit(500);
   if (error) throw new Error(error.message);
   const byPartner = new Map<string, { last: Message; unread: number }>();
-  for (const m of (data ?? []) as Message[]) {
+  for (const m of ((data ?? []) as Message[]).filter((x) => !isHiddenFor(x, me))) {
     const p = m.sender_id === me ? m.recipient_id : m.sender_id;
     const e = byPartner.get(p) ?? { last: m, unread: 0 };
     if (m.recipient_id === me && !m.read_at) e.unread++;
@@ -72,22 +82,22 @@ export async function listConversations(me: string): Promise<Conversation[]> {
 export async function loadThread(me: string, other: string): Promise<Message[]> {
   const { data, error } = await supabase
     .from("messages")
-    .select("id, sender_id, recipient_id, body, created_at, read_at")
+    .select(COLS)
     .or(`and(sender_id.eq.${me},recipient_id.eq.${other}),and(sender_id.eq.${other},recipient_id.eq.${me})`)
     .order("created_at", { ascending: true })
     .limit(1000);
   if (error) throw new Error(error.message);
-  return (data ?? []) as Message[];
+  return ((data ?? []) as Message[]).filter((x) => !isHiddenFor(x, me));
 }
 
-export async function sendMessage(me: string, to: string, body: string): Promise<Message> {
+export async function sendMessage(me: string, to: string, body: string, replyTo: string | null = null): Promise<Message> {
   const text = body.trim();
   if (!text) throw new Error("Message is empty.");
   if (text.length > MESSAGE_MAX) throw new Error(`Message is too long (max ${MESSAGE_MAX}).`);
   const { data, error } = await supabase
     .from("messages")
-    .insert({ sender_id: me, recipient_id: to, body: text })
-    .select("id, sender_id, recipient_id, body, created_at, read_at")
+    .insert({ sender_id: me, recipient_id: to, body: text, reply_to_id: replyTo })
+    .select(COLS)
     .single();
   if (error) throw new Error(error.message);
   return data as Message;
@@ -100,4 +110,19 @@ export async function markRead(me: string, other: string) {
     .eq("recipient_id", me)
     .eq("sender_id", other)
     .is("read_at", null);
+}
+
+export async function editMessage(id: string, body: string) {
+  const text = body.trim();
+  if (!text) throw new Error("Message is empty.");
+  if (text.length > MESSAGE_MAX) throw new Error(`Message is too long (max ${MESSAGE_MAX}).`);
+  const { error } = await supabase.from("messages").update({ body: text }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/** Sender: deletes for everyone. Recipient: hides it for themselves only. */
+export async function deleteMessage(m: Message, me: string) {
+  const patch = m.sender_id === me ? { deleted_at: new Date().toISOString() } : { recipient_hidden: true };
+  const { error } = await supabase.from("messages").update(patch).eq("id", m.id);
+  if (error) throw new Error(error.message);
 }
