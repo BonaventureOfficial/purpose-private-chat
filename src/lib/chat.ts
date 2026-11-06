@@ -13,7 +13,7 @@ export type Message = {
   recipient_hidden: boolean;
   reply_to_id: string | null;
   attachment_url: string | null;
-  attachment_type: "image" | "video" | "pdf" | null;
+  attachment_type: "image" | "video" | "pdf" | "audio" | null;
   attachment_name: string | null;
 };
 export type Attachment = { url: string; type: "image" | "video" | "pdf"; name: string };

@@ -42,12 +42,15 @@ export const VIDEO_MAX_SECONDS = 60;
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const PDF_MAX_BYTES = 20 * 1024 * 1024;
 
-export type FileKind = "image" | "video" | "pdf";
+export type FileKind = "image" | "video" | "pdf" | "audio";
+const AUDIO_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/aac", "audio/wav"];
+const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
 /** Pure rule check: returns the kind or a user-facing error. */
 export function checkFile(type: string, size: number, durationSec?: number): { kind: FileKind } | { error: string } {
   if (IMAGE_TYPES.includes(type)) return size > IMAGE_MAX_BYTES ? { error: "This image is too large (max 10 MB)." } : { kind: "image" };
   if (type === "application/pdf") return size > PDF_MAX_BYTES ? { error: "This PDF is too large (max 20 MB)." } : { kind: "pdf" };
+  if (AUDIO_TYPES.includes(type.split(";")[0]!)) return size > AUDIO_MAX_BYTES ? { error: "This recording is too large." } : { kind: "audio" };
   if (VIDEO_TYPES.includes(type)) {
     if (size > VIDEO_MAX_BYTES) return { error: "This video is too large (max 20 MB)." };
     if (durationSec !== undefined && durationSec > VIDEO_MAX_SECONDS + 0.5) return { error: "This video is too long (max 1 minute)." };
