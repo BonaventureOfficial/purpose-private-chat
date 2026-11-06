@@ -16,7 +16,7 @@ export type Message = {
   attachment_type: "image" | "video" | "pdf" | "audio" | null;
   attachment_name: string | null;
 };
-export type Attachment = { url: string; type: "image" | "video" | "pdf"; name: string };
+export type Attachment = { url: string; type: "image" | "video" | "pdf" | "audio"; name: string };
 export type Conversation = { partner: PublicProfile; last: Message; unread: number };
 
 export const MESSAGE_MAX = 4000;

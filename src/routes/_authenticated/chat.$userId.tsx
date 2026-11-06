@@ -1,12 +1,12 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { ArrowLeft, Check, FileText, Loader2, Paperclip, Copy, CornerUpLeft, Lock, MoreVertical, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Mic, Square, Check, FileText, Loader2, Paperclip, Copy, CornerUpLeft, Lock, MoreVertical, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MESSAGE_MAX, dateLabel, deleteMessage, editMessage, getProfile, isHiddenFor, loadThread, markRead, myId, sendMessage, type Message, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
-import { uploadMedia, validateFile } from "@/lib/media";
+import { uploadMedia, validateFile, type FileKind } from "@/lib/media";
 
 export const Route = createFileRoute("/_authenticated/chat/$userId")({
   head: () => ({
@@ -52,7 +52,21 @@ function ChatPage() {
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const camRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [staged, setStaged] = useState<{ file: File; kind: FileKind; preview: string } | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recSecs, setRecSecs] = useState(0);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const cancelRecRef = useRef(false);
+
+  useEffect(() => {
+    if (!recording) return;
+    const t = setInterval(() => setRecSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [recording]);
+
+  useEffect(() => () => { if (staged) URL.revokeObjectURL(staged.preview); }, [staged]);
 
   useEffect(() => {
     let active = true;
@@ -104,6 +118,7 @@ function ChatPage() {
   }, [text]);
 
   async function send() {
+    if (staged) { await sendStaged(); return; }
     if (!me || !text.trim() || sending) return;
     const body = text;
     if (editing) {
@@ -149,21 +164,59 @@ function ChatPage() {
     }
   }
 
-  async function onFile(file: File) {
-    if (!me || uploading) return;
-    setUploading(true); setErr(null);
+  async function stageFile(file: File) {
     try {
       const kind = await validateFile(file);
-      const url = await uploadMedia(file, "media");
-      const m = await sendMessage(me, userId, text, replyTo?.id ?? null, { url, type: kind, name: file.name.slice(0, 200) });
+      setStaged({ file, kind, preview: URL.createObjectURL(file) });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "This file cannot be sent.");
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+      if (camRef.current) camRef.current.value = "";
+    }
+  }
+
+  async function sendStaged() {
+    if (!me || !staged || uploading) return;
+    setUploading(true); setErr(null);
+    try {
+      const url = await uploadMedia(staged.file, "media");
+      const m = await sendMessage(me, userId, text, replyTo?.id ?? null, { url, type: staged.kind, name: staged.file.name.slice(0, 200) });
       setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
-      setText(""); setReplyTo(null);
+      setText(""); setReplyTo(null); setStaged(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not send the file.");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
+    } finally { setUploading(false); }
+  }
+
+  async function startRecording() {
+    if (recording || staged) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 } });
+      const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 128000 } : undefined);
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        if (cancelRecRef.current || !chunks.length) return;
+        const type = (rec.mimeType || "audio/webm").split(";")[0]!;
+        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+        void stageFile(new File(chunks, `voice-${Date.now()}.${ext}`, { type }));
+      };
+      cancelRecRef.current = false;
+      recRef.current = rec;
+      rec.start();
+      setRecSecs(0); setRecording(true);
+    } catch {
+      toast.error("Microphone access was denied.");
     }
+  }
+
+  function stopRecording(cancel = false) {
+    cancelRecRef.current = cancel;
+    recRef.current?.stop();
   }
 
   async function onDelete(m: Message) {
@@ -245,6 +298,9 @@ function ChatPage() {
                         {m.attachment_type === "video" && (
                           <video src={m.attachment_url} controls preload="metadata" className="max-h-72 rounded-xl" />
                         )}
+                        {m.attachment_type === "audio" && (
+                          <audio src={m.attachment_url} controls preload="metadata" className="w-64 max-w-full" />
+                        )}
                         {m.attachment_type === "pdf" && (
                           <a href={m.attachment_url} target="_blank" rel="noreferrer" className={cn("flex items-center gap-2 rounded-xl px-3 py-2", mine ? "bg-primary-foreground/10" : "bg-secondary")}>
                             <FileText className="h-6 w-6 shrink-0" /><span className="truncate text-sm font-medium">{m.attachment_name ?? "Document.pdf"}</span>
@@ -310,12 +366,35 @@ function ChatPage() {
               </button>
             </div>
           )}
+          {recording && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl bg-secondary px-3 py-2 text-sm">
+              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-destructive" />
+              <span className="flex-1 font-medium text-foreground">Recording… {Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, "0")}</span>
+              <button onClick={() => stopRecording(true)} aria-label="Cancel recording" className="rounded-full p-1 hover:bg-background"><X className="h-4 w-4" /></button>
+            </div>
+          )}
+          {staged && (
+            <div className="mb-2 flex items-center gap-3 rounded-xl bg-secondary p-2">
+              {staged.kind === "image" && <img src={staged.preview} alt="" className="h-16 w-16 rounded-lg object-cover" />}
+              {staged.kind === "video" && <video src={staged.preview} className="h-16 w-16 rounded-lg object-cover" muted />}
+              {staged.kind === "pdf" && <FileText className="h-10 w-10 text-primary" />}
+              {staged.kind === "audio" && <audio src={staged.preview} controls className="h-10 max-w-[220px]" />}
+              <p className="min-w-0 flex-1 truncate text-sm text-foreground">{staged.kind === "audio" ? "Voice message" : staged.file.name}</p>
+              <button onClick={() => setStaged(null)} disabled={uploading} aria-label="Remove file" className="rounded-full p-1 hover:bg-background"><X className="h-4 w-4" /></button>
+            </div>
+          )}
           <div className="flex items-end gap-2 rounded-2xl border-2 border-primary/30 bg-background p-1.5 shadow-sm transition focus-within:border-primary">
             <input ref={fileRef} type="file" hidden accept="image/*,video/*,application/pdf"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); }} />
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || !!editing} aria-label="Attach file"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void stageFile(f); }} />
+            <input ref={camRef} type="file" hidden accept="image/*,video/*" capture="environment"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void stageFile(f); }} />
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || recording || !!editing || !!staged} aria-label="Attach file"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40">
-              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+              <Paperclip className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={() => camRef.current?.click()} disabled={uploading || recording || !!editing || !!staged} aria-label="Take photo or video"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40">
+              <Camera className="h-5 w-5" />
             </button>
             <textarea
               ref={taRef}
@@ -331,13 +410,18 @@ function ChatPage() {
               aria-label="Message"
               className="max-h-40 flex-1 resize-none bg-transparent px-3 py-2 text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
             />
+            <button type="button" onClick={() => (recording ? stopRecording() : void startRecording())} disabled={uploading || !!editing || !!staged}
+              aria-label={recording ? "Stop recording" : "Record voice"}
+              className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition disabled:opacity-40", recording ? "bg-destructive text-destructive-foreground" : "text-primary hover:bg-secondary")}>
+              {recording ? <Square className="h-4 w-4" /> : <Mic className="h-5 w-5" />}
+            </button>
             <button
               onClick={() => void send()}
-              disabled={!text.trim() || sending}
+              disabled={(!text.trim() && !staged) || sending || uploading || recording}
               aria-label="Send"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
             >
-              <SendHorizontal className="h-5 w-5" />
+              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <SendHorizontal className="h-5 w-5" />}
             </button>
           </div>
         </div>
