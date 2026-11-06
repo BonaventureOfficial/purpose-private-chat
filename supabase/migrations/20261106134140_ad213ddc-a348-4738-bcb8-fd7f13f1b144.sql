@@ -1,0 +1,2 @@
+ALTER TABLE public.messages DROP CONSTRAINT IF EXISTS messages_attachment_type_check;
+ALTER TABLE public.messages ADD CONSTRAINT messages_attachment_type_check CHECK (attachment_type IN ('image','video','pdf','audio'));

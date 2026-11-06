@@ -9,4 +9,5 @@ describe("checkFile", () => {
   it("rejects a video over 1 minute", () => expect("error" in checkFile("video/mp4", 5 * MB, 75)).toBe(true));
   it("accepts a PDF", () => expect(checkFile("application/pdf", MB)).toEqual({ kind: "pdf" }));
   it("rejects non-standard formats", () => expect("error" in checkFile("application/zip", MB)).toBe(true));
+  it("accepts a voice recording", () => expect(checkFile("audio/webm;codecs=opus", MB)).toEqual({ kind: "audio" }));
 });
