@@ -12,11 +12,15 @@ export type Message = {
   deleted_at: string | null;
   recipient_hidden: boolean;
   reply_to_id: string | null;
+  attachment_url: string | null;
+  attachment_type: "image" | "video" | "pdf" | null;
+  attachment_name: string | null;
 };
+export type Attachment = { url: string; type: "image" | "video" | "pdf"; name: string };
 export type Conversation = { partner: PublicProfile; last: Message; unread: number };
 
 export const MESSAGE_MAX = 4000;
-const COLS = "id, sender_id, recipient_id, body, created_at, read_at, edited_at, deleted_at, recipient_hidden, reply_to_id";
+const COLS = "id, sender_id, recipient_id, body, created_at, read_at, edited_at, deleted_at, recipient_hidden, reply_to_id, attachment_url, attachment_type, attachment_name";
 
 /** Hidden for this viewer: the recipient deleted it for themselves. */
 export function isHiddenFor(m: Message, me: string) {
@@ -90,13 +94,13 @@ export async function loadThread(me: string, other: string): Promise<Message[]> 
   return ((data ?? []) as Message[]).filter((x) => !isHiddenFor(x, me));
 }
 
-export async function sendMessage(me: string, to: string, body: string, replyTo: string | null = null): Promise<Message> {
+export async function sendMessage(me: string, to: string, body: string, replyTo: string | null = null, att: Attachment | null = null): Promise<Message> {
   const text = body.trim();
-  if (!text) throw new Error("Message is empty.");
+  if (!text && !att) throw new Error("Message is empty.");
   if (text.length > MESSAGE_MAX) throw new Error(`Message is too long (max ${MESSAGE_MAX}).`);
   const { data, error } = await supabase
     .from("messages")
-    .insert({ sender_id: me, recipient_id: to, body: text, reply_to_id: replyTo })
+    .insert({ sender_id: me, recipient_id: to, body: text, reply_to_id: replyTo, attachment_url: att?.url ?? null, attachment_type: att?.type ?? null, attachment_name: att?.name ?? null })
     .select(COLS)
     .single();
   if (error) throw new Error(error.message);
