@@ -34,3 +34,42 @@ export async function getMyProfile() {
   const { data } = await supabase.from("profiles").select("username, avatar_url").eq("id", u.user.id).maybeSingle();
   return data;
 }
+
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
+export const VIDEO_MAX_BYTES = 20 * 1024 * 1024;
+export const VIDEO_MAX_SECONDS = 60;
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const PDF_MAX_BYTES = 20 * 1024 * 1024;
+
+export type FileKind = "image" | "video" | "pdf";
+
+/** Pure rule check: returns the kind or a user-facing error. */
+export function checkFile(type: string, size: number, durationSec?: number): { kind: FileKind } | { error: string } {
+  if (IMAGE_TYPES.includes(type)) return size > IMAGE_MAX_BYTES ? { error: "This image is too large (max 10 MB)." } : { kind: "image" };
+  if (type === "application/pdf") return size > PDF_MAX_BYTES ? { error: "This PDF is too large (max 20 MB)." } : { kind: "pdf" };
+  if (VIDEO_TYPES.includes(type)) {
+    if (size > VIDEO_MAX_BYTES) return { error: "This video is too large (max 20 MB)." };
+    if (durationSec !== undefined && durationSec > VIDEO_MAX_SECONDS + 0.5) return { error: "This video is too long (max 1 minute)." };
+    return { kind: "video" };
+  }
+  return { error: "Unsupported file. Send a JPG, PNG, WEBP, GIF, MP4, WEBM, MOV or PDF." };
+}
+
+function videoDuration(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement("video");
+    const url = URL.createObjectURL(file);
+    v.preload = "metadata";
+    v.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(v.duration); };
+    v.onerror = () => { URL.revokeObjectURL(url); reject(new Error("This video could not be read.")); };
+    v.src = url;
+  });
+}
+
+export async function validateFile(file: File): Promise<FileKind> {
+  let r = checkFile(file.type, file.size);
+  if ("kind" in r && r.kind === "video") r = checkFile(file.type, file.size, await videoDuration(file));
+  if ("error" in r) throw new Error(r.error);
+  return r.kind;
+}

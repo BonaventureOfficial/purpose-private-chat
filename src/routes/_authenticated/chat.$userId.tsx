@@ -1,11 +1,12 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { ArrowLeft, Check, Copy, CornerUpLeft, Lock, MoreVertical, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, FileText, Loader2, Paperclip, Copy, CornerUpLeft, Lock, MoreVertical, Pencil, SendHorizontal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MESSAGE_MAX, dateLabel, deleteMessage, editMessage, getProfile, isHiddenFor, loadThread, markRead, myId, sendMessage, type Message, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
+import { uploadMedia, validateFile } from "@/lib/media";
 
 export const Route = createFileRoute("/_authenticated/chat/$userId")({
   head: () => ({
@@ -50,6 +51,8 @@ function ChatPage() {
   const [editing, setEditing] = useState<Message | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -127,6 +130,7 @@ function ChatPage() {
       deleted_at: null,
       recipient_hidden: false,
       reply_to_id: reply?.id ?? null,
+      attachment_url: null, attachment_type: null, attachment_name: null,
     };
     setSending(true); setErr(null);
     setPending((p) => [...p, optimistic]);
@@ -142,6 +146,23 @@ function ChatPage() {
     } finally {
       setSending(false);
       taRef.current?.focus();
+    }
+  }
+
+  async function onFile(file: File) {
+    if (!me || uploading) return;
+    setUploading(true); setErr(null);
+    try {
+      const kind = await validateFile(file);
+      const url = await uploadMedia(file, "media");
+      const m = await sendMessage(me, userId, text, replyTo?.id ?? null, { url, type: kind, name: file.name.slice(0, 200) });
+      setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+      setText(""); setReplyTo(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the file.");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
@@ -216,6 +237,21 @@ function ChatPage() {
                         </span>
                       );
                     })()}
+                    {!m.deleted_at && m.attachment_url && (
+                      <span className="mb-1 block">
+                        {m.attachment_type === "image" && (
+                          <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name ?? "Image"} className="max-h-72 rounded-xl object-cover" loading="lazy" /></a>
+                        )}
+                        {m.attachment_type === "video" && (
+                          <video src={m.attachment_url} controls preload="metadata" className="max-h-72 rounded-xl" />
+                        )}
+                        {m.attachment_type === "pdf" && (
+                          <a href={m.attachment_url} target="_blank" rel="noreferrer" className={cn("flex items-center gap-2 rounded-xl px-3 py-2", mine ? "bg-primary-foreground/10" : "bg-secondary")}>
+                            <FileText className="h-6 w-6 shrink-0" /><span className="truncate text-sm font-medium">{m.attachment_name ?? "Document.pdf"}</span>
+                          </a>
+                        )}
+                      </span>
+                    )}
                     {m.deleted_at ? <em className="opacity-70">Message deleted</em> : m.body}
                     {m.edited_at && !m.deleted_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
                     <span className={cn("ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10px]", mine ? "text-primary-foreground/70" : "text-muted-foreground")}>
@@ -231,17 +267,19 @@ function ChatPage() {
                       <DropdownMenuContent align={mine ? "end" : "start"} className="w-40">
                         {mine && (
                           <>
-                            <DropdownMenuItem onSelect={() => { setReplyTo(null); setEditing(m); setText(m.body); setTimeout(() => taRef.current?.focus(), 0); }}>
+                            {!m.attachment_url && <DropdownMenuItem onSelect={() => { setReplyTo(null); setEditing(m); setText(m.body); setTimeout(() => taRef.current?.focus(), 0); }}>
                               <Pencil className="h-4 w-4" /> Edit
-                            </DropdownMenuItem>
+                            </DropdownMenuItem>}
                             <DropdownMenuItem onSelect={() => { setEditing(null); setReplyTo(m); setTimeout(() => taRef.current?.focus(), 0); }}>
                               <CornerUpLeft className="h-4 w-4" /> Reply
                             </DropdownMenuItem>
                           </>
                         )}
-                        <DropdownMenuItem onSelect={() => void onCopy(m)}>
-                          <Copy className="h-4 w-4" /> Copy
-                        </DropdownMenuItem>
+                        {m.body && (
+                          <DropdownMenuItem onSelect={() => void onCopy(m)}>
+                            <Copy className="h-4 w-4" /> Copy
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onSelect={() => void onDelete(m)} className="text-destructive focus:text-destructive">
                           <Trash2 className="h-4 w-4" /> Delete
@@ -273,6 +311,12 @@ function ChatPage() {
             </div>
           )}
           <div className="flex items-end gap-2 rounded-2xl border-2 border-primary/30 bg-background p-1.5 shadow-sm transition focus-within:border-primary">
+            <input ref={fileRef} type="file" hidden accept="image/*,video/*,application/pdf"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); }} />
+            <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || !!editing} aria-label="Attach file"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40">
+              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+            </button>
             <textarea
               ref={taRef}
               rows={1}
