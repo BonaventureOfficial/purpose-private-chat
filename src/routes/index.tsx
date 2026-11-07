@@ -9,6 +9,8 @@ export const Route = createFileRoute("/")({
       { name: "description", content: "Your conversations. Your privacy. Your purpose. Create your Purpose account." },
       { property: "og:title", content: "Welcome to Purpose" },
       { property: "og:description", content: "Your conversations. Your privacy. Your purpose." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   beforeLoad: async () => {
