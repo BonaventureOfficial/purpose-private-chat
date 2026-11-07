@@ -13,6 +13,8 @@ export const Route = createFileRoute("/_authenticated/profile")({
       { name: "description", content: "Your Purpose profile." },
       { property: "og:title", content: "Profile — Purpose" },
       { property: "og:description", content: "Your Purpose profile." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: ProfilePage,
