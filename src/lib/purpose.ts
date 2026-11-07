@@ -41,16 +41,36 @@ export function syntheticEmail(username: string) {
   return `${normalizeUsername(username)}@${SIGNUP_EMAIL_DOMAIN}`;
 }
 
-export const BACKGROUNDS = [
-  { name: "White", value: "oklch(1 0 0)" },
-  { name: "Cloud", value: "oklch(0.97 0.01 250)" },
-  { name: "Sand", value: "oklch(0.96 0.02 85)" },
-  { name: "Mint", value: "oklch(0.96 0.03 165)" },
-  { name: "Sky", value: "oklch(0.94 0.04 230)" },
-  { name: "Blush", value: "oklch(0.95 0.03 10)" },
-  { name: "Lavender", value: "oklch(0.94 0.04 295)" },
-  { name: "Lemon", value: "oklch(0.97 0.06 100)" },
-  { name: "Peach", value: "oklch(0.93 0.05 55)" },
-  { name: "Sage", value: "oklch(0.92 0.03 140)" },
+export interface PurposeBackground {
+  name: string;
+  value: string;
+  dark?: boolean;
+}
+
+// 10 calibrated premium background options (3 dark tones + 7 light tones)
+export const BACKGROUNDS: PurposeBackground[] = [
+  // --- 3 Premium Dark Themes ---
+  { name: "Obsidian Black", value: "oklch(0.13 0.015 260)", dark: true },
+  { name: "Midnight Navy", value: "oklch(0.18 0.065 255)", dark: true },
+  { name: "Deep Forest", value: "oklch(0.19 0.06 155)", dark: true },
+
+  // --- 7 Light Themes ---
+  { name: "Pure White", value: "oklch(1 0 0)", dark: false },
+  { name: "Platinum Cloud", value: "oklch(0.97 0.01 250)", dark: false },
+  { name: "Desert Sand", value: "oklch(0.96 0.02 85)", dark: false },
+  { name: "Frosted Mint", value: "oklch(0.96 0.03 165)", dark: false },
+  { name: "Nordic Sky", value: "oklch(0.94 0.04 230)", dark: false },
+  { name: "Soft Lavender", value: "oklch(0.94 0.04 295)", dark: false },
+  { name: "Rose Blush", value: "oklch(0.95 0.03 10)", dark: false },
 ];
 
+/** Determines whether the selected background color is dark to apply inverted high-contrast text. */
+export function isDarkBackground(value: string): boolean {
+  const bg = BACKGROUNDS.find((b) => b.value === value);
+  if (bg && typeof bg.dark === "boolean") return bg.dark;
+  const match = value.match(/oklch\(\s*([\d.]+)/);
+  if (match && match[1]) {
+    return parseFloat(match[1]) < 0.5;
+  }
+  return false;
+}
