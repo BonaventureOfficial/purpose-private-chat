@@ -2,9 +2,9 @@ import type { SVGProps } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Pure vector SVG implementation of the Purpose emblem.
- * Replaces pixelated PNGs with an infinitely scalable, crisp vector mark.
- * Uses `currentColor` by default so it dynamically matches the theme (dark / light).
+ * Native vector SVG implementation of the Purpose emblem.
+ * Replaces all external PNGs with a crisp, infinitely scalable vector mark.
+ * Supports light/dark themes dynamically via currentColor.
  */
 export function Logo({
   className,
