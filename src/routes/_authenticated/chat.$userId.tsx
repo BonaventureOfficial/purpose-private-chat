@@ -7,6 +7,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { MESSAGE_MAX, dateLabel, deleteMessage, editMessage, getProfile, isHiddenFor, loadThread, markRead, myId, sendMessage, type Message, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 import { uploadMedia, validateFile, type FileKind } from "@/lib/media";
+import { useBackground } from "@/components/purpose/AppShell";
+import { isDarkBackground } from "@/lib/purpose";
 
 export const Route = createFileRoute("/_authenticated/chat/$userId")({
   head: () => ({
@@ -40,6 +42,8 @@ function Ticks({ sending, read }: { sending: boolean; read: boolean }) {
 
 function ChatPage() {
   const { userId } = Route.useParams();
+  const [bg] = useBackground();
+  const isDark = isDarkBackground(bg);
   const [me, setMe] = useState<string | null>(null);
   const [other, setOther] = useState<PublicProfile | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
@@ -96,127 +100,139 @@ function ChatPage() {
         (payload) => {
           const m = payload.new as Message;
           if (m.sender_id !== userId) return;
-          setMsgs((prev) => isHiddenFor(m, me) ? prev.filter((x) => x.id !== m.id) : prev.map((x) => (x.id === m.id ? m : x)));
-        })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: `sender_id=eq.${me}` },
-        (payload) => {
-          const m = payload.new as Message;
-          if (m.recipient_id !== userId) return;
           setMsgs((prev) => prev.map((x) => (x.id === m.id ? m : x)));
         })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
   }, [me, userId]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length, pending.length]);
-
   useEffect(() => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
-  }, [text]);
-
-  async function send() {
-    if (staged) { await sendStaged(); return; }
-    if (!me || !text.trim() || sending) return;
-    const body = text;
-    if (editing) {
-      const target = editing;
-      setSending(true); setErr(null);
-      try {
-        await editMessage(target.id, body);
-        setMsgs((prev) => prev.map((x) => (x.id === target.id ? { ...x, body: body.trim(), edited_at: new Date().toISOString() } : x)));
-        setEditing(null); setText("");
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : "Could not edit.");
-      } finally { setSending(false); taRef.current?.focus(); }
-      return;
-    }
-    const reply = replyTo;
-    const optimistic: Message = {
-      id: `pending-${Date.now()}`,
-      sender_id: me,
-      recipient_id: userId,
-      body,
-      created_at: new Date().toISOString(),
-      read_at: null,
-      edited_at: null,
-      deleted_at: null,
-      recipient_hidden: false,
-      reply_to_id: reply?.id ?? null,
-      attachment_url: null, attachment_type: null, attachment_name: null,
-    };
-    setSending(true); setErr(null);
-    setPending((p) => [...p, optimistic]);
-    setText(""); setReplyTo(null);
-    try {
-      const m = await sendMessage(me, userId, body, reply?.id ?? null);
-      setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
-      setPending((p) => p.filter((x) => x.id !== optimistic.id));
-    } catch (e) {
-      setPending((p) => p.filter((x) => x.id !== optimistic.id));
-      setText(body); setReplyTo(reply);
-      setErr(e instanceof Error ? e.message : "Could not send.");
-    } finally {
-      setSending(false);
-      taRef.current?.focus();
-    }
-  }
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs, pending]);
 
   async function stageFile(file: File) {
-    try {
-      const kind = await validateFile(file);
-      setStaged({ file, kind, preview: URL.createObjectURL(file) });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "This file cannot be sent.");
-    } finally {
-      if (fileRef.current) fileRef.current.value = "";
-      if (camRef.current) camRef.current.value = "";
-    }
-  }
-
-  async function sendStaged() {
-    if (!me || !staged || uploading) return;
-    setUploading(true); setErr(null);
-    try {
-      const url = await uploadMedia(staged.file, "media");
-      const m = await sendMessage(me, userId, text, replyTo?.id ?? null, { url, type: staged.kind, name: staged.file.name.slice(0, 200) });
-      setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
-      setText(""); setReplyTo(null); setStaged(null);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not send the file.");
-    } finally { setUploading(false); }
+    const err = validateFile(file);
+    if (err) { toast.error(err); return; }
+    const kind: FileKind = file.type.startsWith("image/") ? "image"
+      : file.type.startsWith("video/") ? "video"
+      : file.type.startsWith("audio/") ? "audio" : "pdf";
+    setStaged({ file, kind, preview: URL.createObjectURL(file) });
   }
 
   async function startRecording() {
-    if (recording || staged) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 } });
-      const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
-      const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 128000 } : undefined);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const types = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+      const mime = types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       const chunks: Blob[] = [];
-      rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      cancelRecRef.current = false;
+      rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        setRecording(false);
-        if (cancelRecRef.current || !chunks.length) return;
-        const type = (rec.mimeType || "audio/webm").split(";")[0]!;
-        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-        void stageFile(new File(chunks, `voice-${Date.now()}.${ext}`, { type }));
+        if (cancelRecRef.current) return;
+        const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+        const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type });
+        void stageFile(file);
       };
-      cancelRecRef.current = false;
       recRef.current = rec;
       rec.start();
-      setRecSecs(0); setRecording(true);
+      setRecSecs(0);
+      setRecording(true);
     } catch {
-      toast.error("Microphone access was denied.");
+      toast.error("Microphone access denied or unavailable.");
     }
   }
 
   function stopRecording(cancel = false) {
     cancelRecRef.current = cancel;
-    recRef.current?.stop();
+    if (recRef.current && recRef.current.state !== "inactive") {
+      recRef.current.stop();
+    }
+    setRecording(false);
+  }
+
+  async function send() {
+    if ((!text.trim() && !staged) || sending || !me) return;
+    setSending(true);
+    setErr(null);
+
+    let att: { url: string; key: string; type: FileKind; name: string; size: number } | undefined;
+    if (staged) {
+      setUploading(true);
+      try {
+        const up = await uploadMedia(staged.file, "media");
+        att = {
+          url: up.url,
+          key: up.key,
+          type: staged.kind,
+          name: staged.file.name,
+          size: staged.file.size,
+        };
+      } catch (e) {
+        setUploading(false);
+        setSending(false);
+        setErr(e instanceof Error ? e.message : "Upload failed");
+        return;
+      }
+      setUploading(false);
+    }
+
+    const currentText = text.trim();
+    const tempId = `pending-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      sender_id: me,
+      recipient_id: userId,
+      body: currentText,
+      reply_to_id: replyTo?.id ?? null,
+      attachment_url: att?.url ?? null,
+      attachment_key: att?.key ?? null,
+      attachment_type: att?.type ?? null,
+      attachment_name: att?.name ?? null,
+      attachment_size: att?.size ?? null,
+      created_at: new Date().toISOString(),
+      read_at: null,
+      edited_at: null,
+      deleted_at: null,
+    };
+
+    setPending((p) => [...p, optimistic]);
+    setText("");
+    setStaged(null);
+    const activeReply = replyTo;
+    setReplyTo(null);
+
+    try {
+      const real = await sendMessage({
+        recipientId: userId,
+        body: currentText,
+        replyToId: activeReply?.id,
+        attachment: att,
+      });
+      setPending((p) => p.filter((x) => x.id !== tempId));
+      setMsgs((m) => [...m, real]);
+    } catch (e) {
+      setPending((p) => p.filter((x) => x.id !== tempId));
+      setText(currentText);
+      setErr(e instanceof Error ? e.message : "Failed to send");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function onSaveEdit() {
+    if (!editing || !text.trim()) return;
+    const newBody = text.trim();
+    try {
+      const updated = await editMessage(editing.id, newBody);
+      setMsgs((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      setEditing(null);
+      setText("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not edit.");
+    }
   }
 
   async function onDelete(m: Message) {
@@ -239,8 +255,14 @@ function ChatPage() {
   const display = [...msgs, ...pending];
 
   return (
-    <div className="flex h-dvh flex-col bg-secondary/40">
-      <header className="shrink-0 border-b border-border bg-background/90 backdrop-blur">
+    <div
+      className={cn(
+        "relative flex h-dvh flex-col transition-colors duration-200",
+        isDark && "dark text-foreground",
+      )}
+      style={{ backgroundColor: bg }}
+    >
+      <header className="relative z-10 shrink-0 border-b border-border bg-background/85 backdrop-blur-md">
         <div className="mx-auto flex max-w-2xl items-center gap-3 px-3 py-2.5">
           <Link to="/home" aria-label="Back" className="flex h-10 w-10 items-center justify-center rounded-full text-primary hover:bg-secondary">
             <ArrowLeft className="h-5 w-5" />
@@ -257,8 +279,17 @@ function ChatPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-1.5 px-3 py-4">
+      <main className="relative flex-1 overflow-y-auto">
+        {/* Subtle cryptographic privacy motif in wallpaper */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-[0.035] dark:opacity-[0.055] text-foreground"
+          style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M24 16c-2.2 0-4 1.8-4 4v2h-1c-.6 0-1 .4-1 1v7c0 .6.4 1 1 1h10c.6 0 1-.4 1-1v-7c0-.6-.4-1-1-1h-1v-2c0-2.2-1.8-4-4-4zm-2 4c0-1.1.9-2 2-2s2 .9 2 2v2h-4v-2zm2 7a1 1 0 100-2 1 1 0 000 2z' fill='currentColor' fill-rule='evenodd'/%3E%3Ccircle cx='4' cy='4' r='1' fill='currentColor'/%3E%3Ccircle cx='44' cy='44' r='1' fill='currentColor'/%3E%3C/svg%3E")`,
+            backgroundSize: "48px 48px",
+          }}
+        />
+        <div className="relative z-10 mx-auto flex max-w-2xl flex-col gap-1.5 px-3 py-4">
           {display.length === 0 && (
             <p className="py-10 text-center text-sm text-muted-foreground">Say hello to {name} 👋</p>
           )}
@@ -271,7 +302,7 @@ function ChatPage() {
               <Fragment key={m.id}>
                 {label !== prevLabel && (
                   <div className="flex justify-center py-2">
-                    <span className="rounded-full bg-background px-3 py-1 text-xs font-medium text-muted-foreground ring-1 ring-border">
+                    <span className="rounded-full bg-background/85 px-3 py-1 text-xs font-medium text-muted-foreground ring-1 ring-border shadow-xs backdrop-blur-sm">
                       {label}
                     </span>
                   </div>
@@ -279,7 +310,7 @@ function ChatPage() {
                 <div className={cn("group flex items-start gap-1", mine ? "flex-row-reverse" : "flex-row")}>
                   <div className={cn(
                     "max-w-[78%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[15px] shadow-sm",
-                    mine ? "rounded-br-md bg-primary text-primary-foreground" : "rounded-bl-md bg-background text-foreground ring-1 ring-border",
+                    mine ? "rounded-br-md bg-primary text-primary-foreground shadow-xs" : "rounded-bl-md bg-card/95 text-foreground ring-1 ring-border shadow-xs backdrop-blur-xs",
                   )}>
                     {m.reply_to_id && (() => {
                       const q = display.find((x) => x.id === m.reply_to_id);
@@ -351,7 +382,7 @@ function ChatPage() {
         </div>
       </main>
 
-      <footer className="shrink-0 border-t border-border bg-background/95 backdrop-blur">
+      <footer className="relative z-10 shrink-0 border-t border-border bg-background/90 backdrop-blur-md">
         <div className="mx-auto max-w-2xl px-3 py-3">
           {err && <p className="mb-2 text-xs text-destructive">{err}</p>}
           {(editing || replyTo) && (
@@ -405,6 +436,7 @@ function ChatPage() {
               onKeyDown={(e) => {
                 if (e.key === "Escape" && (editing || replyTo)) { if (editing) setText(""); setEditing(null); setReplyTo(null); }
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
+                if (editing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSaveEdit(); }
               }}
               placeholder="Write a message…"
               aria-label="Message"
@@ -416,9 +448,9 @@ function ChatPage() {
               {recording ? <Square className="h-4 w-4" /> : <Mic className="h-5 w-5" />}
             </button>
             <button
-              onClick={() => void send()}
+              onClick={() => (editing ? void onSaveEdit() : void send())}
               disabled={(!text.trim() && !staged) || sending || uploading || recording}
-              aria-label="Send"
+              aria-label={editing ? "Save" : "Send"}
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
             >
               {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <SendHorizontal className="h-5 w-5" />}
