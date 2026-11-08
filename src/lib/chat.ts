@@ -44,8 +44,8 @@ export function dateLabel(iso: string, now = new Date()): string {
 }
 
 export async function myId() {
-  const { data } = await supabase.auth.getUser();
-  return data.user?.id ?? null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user.id ?? null;
 }
 
 export async function searchPeople(q: string): Promise<PublicProfile[]> {

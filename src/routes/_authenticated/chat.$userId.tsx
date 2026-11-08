@@ -434,7 +434,7 @@ function ChatPage() {
             </Button>
             <Button variant="ghost" size="icon"
               onClick={() => (editing ? void onSaveEdit() : void send())}
-              disabled={(!text.trim() && !staged) || sending || uploading || recording}
+              disabled={!me || (!text.trim() && !staged) || sending || uploading || recording}
               aria-label={editing ? "Save" : "Send"}
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
             >
