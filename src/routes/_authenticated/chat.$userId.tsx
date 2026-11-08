@@ -3,8 +3,8 @@ import { ArrowLeft, Camera, Mic, Square, Check, FileText, Loader2, Paperclip, Co
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
-import { MESSAGE_MAX, dateLabel, deleteMessage, editMessage, getProfile, isHiddenFor, loadThread, markRead, myId, sendMessage, type Message, type PublicProfile } from "@/lib/chat";
+import { Button } from "@/components/ui/button";
+import { MESSAGE_MAX, dateLabel, deleteMessage, editMessage, getProfile, loadThread, markRead, myId, sendMessage, type Attachment, type Message, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 import { uploadMedia, validateFile, type FileKind } from "@/lib/media";
 import { useBackground } from "@/components/purpose/AppShell";
@@ -74,49 +74,42 @@ function ChatPage() {
 
   useEffect(() => {
     let active = true;
+    let owner: string | null = null;
+    let reading = false;
+    const refresh = async () => {
+      if (!owner || !active) return;
+      const messages = await loadThread(owner, userId);
+      if (!active) return;
+      setMsgs(messages);
+      if (!reading && document.visibilityState === "visible" && messages.some((m) => m.recipient_id === owner && !m.read_at && !m.deleted_at)) {
+        reading = true;
+        try { await markRead(owner, userId); } finally { reading = false; }
+      }
+    };
+    const onChange = () => { void refresh().catch((error) => setErr(error instanceof Error ? error.message : "Unable to load messages.")); };
+    setMsgs([]);
     void (async () => {
       const id = await myId();
       if (!active || !id) return;
+      owner = id;
       setMe(id);
       setOther(await getProfile(userId));
-      setMsgs(await loadThread(id, userId));
-      void markRead(id, userId);
-    })();
-    return () => { active = false; };
+      await refresh();
+    })().catch((error) => setErr(error instanceof Error ? error.message : "Unable to load messages."));
+    window.addEventListener("purpose-vault-change", onChange);
+    document.addEventListener("visibilitychange", onChange);
+    return () => { active = false; window.removeEventListener("purpose-vault-change", onChange); document.removeEventListener("visibilitychange", onChange); };
   }, [userId]);
-
-  useEffect(() => {
-    if (!me) return;
-    const channel = supabase
-      .channel(`chat-${me}-${userId}-${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `recipient_id=eq.${me}` },
-        (payload) => {
-          const m = payload.new as Message;
-          if (m.sender_id !== userId) return;
-          setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
-          void markRead(me, userId);
-        })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: `recipient_id=eq.${me}` },
-        (payload) => {
-          const m = payload.new as Message;
-          if (m.sender_id !== userId) return;
-          setMsgs((prev) => prev.map((x) => (x.id === m.id ? m : x)));
-        })
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [me, userId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, pending]);
 
   async function stageFile(file: File) {
-    const err = validateFile(file);
-    if (err) { toast.error(err); return; }
-    const kind: FileKind = file.type.startsWith("image/") ? "image"
-      : file.type.startsWith("video/") ? "video"
-      : file.type.startsWith("audio/") ? "audio" : "pdf";
-    setStaged({ file, kind, preview: URL.createObjectURL(file) });
+    try {
+      const kind = await validateFile(file);
+      setStaged({ file, kind, preview: URL.createObjectURL(file) });
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unsupported file."); }
   }
 
   async function startRecording() {
@@ -158,17 +151,15 @@ function ChatPage() {
     setSending(true);
     setErr(null);
 
-    let att: { url: string; key: string; type: FileKind; name: string; size: number } | undefined;
+    let att: Attachment | null = null;
     if (staged) {
       setUploading(true);
       try {
         const up = await uploadMedia(staged.file, "media");
         att = {
-          url: up.url,
-          key: up.key,
+          url: up,
           type: staged.kind,
           name: staged.file.name,
-          size: staged.file.size,
         };
       } catch (e) {
         setUploading(false);
@@ -188,14 +179,13 @@ function ChatPage() {
       body: currentText,
       reply_to_id: replyTo?.id ?? null,
       attachment_url: att?.url ?? null,
-      attachment_key: att?.key ?? null,
       attachment_type: att?.type ?? null,
       attachment_name: att?.name ?? null,
-      attachment_size: att?.size ?? null,
       created_at: new Date().toISOString(),
       read_at: null,
       edited_at: null,
       deleted_at: null,
+      recipient_hidden: false,
     };
 
     setPending((p) => [...p, optimistic]);
@@ -205,14 +195,9 @@ function ChatPage() {
     setReplyTo(null);
 
     try {
-      const real = await sendMessage({
-        recipientId: userId,
-        body: currentText,
-        replyToId: activeReply?.id,
-        attachment: att,
-      });
+      const real = await sendMessage(me, userId, currentText, activeReply?.id ?? null, att);
       setPending((p) => p.filter((x) => x.id !== tempId));
-      setMsgs((m) => [...m, real]);
+      setMsgs((m) => m.some((x) => x.id === real.id) ? m : [...m, real]);
     } catch (e) {
       setPending((p) => p.filter((x) => x.id !== tempId));
       setText(currentText);
@@ -296,8 +281,9 @@ function ChatPage() {
           {display.map((m, i) => {
             const mine = m.sender_id === me;
             const label = dateLabel(m.created_at);
-            const prevLabel = i > 0 ? dateLabel(display[i - 1]!.created_at) : null;
+            const prevLabel = i > 0 ? dateLabel(display[i - 1]?.created_at ?? m.created_at) : null;
             const isPending = m.id.startsWith("pending-");
+            const awaitingDelivery = isPending || m.local_status === "queued" || m.local_status === "sent";
             return (
               <Fragment key={m.id}>
                 {label !== prevLabel && (
@@ -343,7 +329,7 @@ function ChatPage() {
                     {m.edited_at && !m.deleted_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
                     <span className={cn("ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10px]", mine ? "text-primary-foreground/70" : "text-muted-foreground")}>
                       {time(m.created_at)}
-                      {mine && <Ticks sending={isPending} read={!isPending && !!m.read_at} />}
+                      {mine && <Ticks sending={awaitingDelivery} read={!isPending && !!m.read_at} />}
                     </span>
                   </div>
                   {!isPending && !m.deleted_at && (
@@ -390,18 +376,18 @@ function ChatPage() {
               {editing ? <Pencil className="h-3.5 w-3.5 text-primary" /> : <CornerUpLeft className="h-3.5 w-3.5 text-primary" />}
               <div className="min-w-0 flex-1">
                 <p className="font-semibold text-primary">{editing ? "Editing message" : "Replying to your message"}</p>
-                <p className="truncate text-muted-foreground">{(editing ?? replyTo)!.body}</p>
+                <p className="truncate text-muted-foreground">{(editing ?? replyTo)?.body}</p>
               </div>
-              <button aria-label="Cancel" onClick={() => { if (editing) setText(""); setEditing(null); setReplyTo(null); }} className="rounded-full p-1 hover:bg-background">
+              <Button variant="ghost" size="icon" aria-label="Cancel" onClick={() => { if (editing) setText(""); setEditing(null); setReplyTo(null); }} className="rounded-full p-1 hover:bg-background">
                 <X className="h-4 w-4" />
-              </button>
+              </Button>
             </div>
           )}
           {recording && (
             <div className="mb-2 flex items-center gap-2 rounded-xl bg-secondary px-3 py-2 text-sm">
               <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-destructive" />
               <span className="flex-1 font-medium text-foreground">Recording… {Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, "0")}</span>
-              <button onClick={() => stopRecording(true)} aria-label="Cancel recording" className="rounded-full p-1 hover:bg-background"><X className="h-4 w-4" /></button>
+              <Button variant="ghost" size="icon" onClick={() => stopRecording(true)} aria-label="Cancel recording" className="rounded-full p-1 hover:bg-background"><X className="h-4 w-4" /></Button>
             </div>
           )}
           {staged && (
@@ -411,7 +397,7 @@ function ChatPage() {
               {staged.kind === "pdf" && <FileText className="h-10 w-10 text-primary" />}
               {staged.kind === "audio" && <audio src={staged.preview} controls className="h-10 max-w-[220px]" />}
               <p className="min-w-0 flex-1 truncate text-sm text-foreground">{staged.kind === "audio" ? "Voice message" : staged.file.name}</p>
-              <button onClick={() => setStaged(null)} disabled={uploading} aria-label="Remove file" className="rounded-full p-1 hover:bg-background"><X className="h-4 w-4" /></button>
+              <Button variant="ghost" size="icon" onClick={() => setStaged(null)} disabled={uploading} aria-label="Remove file" className="rounded-full p-1 hover:bg-background"><X className="h-4 w-4" /></Button>
             </div>
           )}
           <div className="flex items-end gap-2 rounded-2xl border-2 border-primary/30 bg-background p-1.5 shadow-sm transition focus-within:border-primary">
@@ -419,14 +405,14 @@ function ChatPage() {
               onChange={(e) => { const f = e.target.files?.[0]; if (f) void stageFile(f); }} />
             <input ref={camRef} type="file" hidden accept="image/*,video/*" capture="environment"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) void stageFile(f); }} />
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || recording || !!editing || !!staged} aria-label="Attach file"
+            <Button variant="ghost" size="icon" type="button" onClick={() => fileRef.current?.click()} disabled={uploading || recording || !!editing || !!staged} aria-label="Attach file"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40">
               <Paperclip className="h-5 w-5" />
-            </button>
-            <button type="button" onClick={() => camRef.current?.click()} disabled={uploading || recording || !!editing || !!staged} aria-label="Take photo or video"
+            </Button>
+            <Button variant="ghost" size="icon" type="button" onClick={() => camRef.current?.click()} disabled={uploading || recording || !!editing || !!staged} aria-label="Take photo or video"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40">
               <Camera className="h-5 w-5" />
-            </button>
+            </Button>
             <textarea
               ref={taRef}
               rows={1}
@@ -435,26 +421,25 @@ function ChatPage() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape" && (editing || replyTo)) { if (editing) setText(""); setEditing(null); setReplyTo(null); }
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
-                if (editing && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSaveEdit(); }
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (editing) void onSaveEdit(); else void send(); }
               }}
               placeholder="Write a message…"
               aria-label="Message"
-              className="max-h-40 flex-1 resize-none bg-transparent px-3 py-2 text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
+              className="min-w-0 max-h-40 flex-1 resize-none bg-transparent px-3 py-2 text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
             />
-            <button type="button" onClick={() => (recording ? stopRecording() : void startRecording())} disabled={uploading || !!editing || !!staged}
+            <Button variant="ghost" size="icon" type="button" onClick={() => (recording ? stopRecording() : void startRecording())} disabled={uploading || !!editing || !!staged}
               aria-label={recording ? "Stop recording" : "Record voice"}
               className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition disabled:opacity-40", recording ? "bg-destructive text-destructive-foreground" : "text-primary hover:bg-secondary")}>
               {recording ? <Square className="h-4 w-4" /> : <Mic className="h-5 w-5" />}
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost" size="icon"
               onClick={() => (editing ? void onSaveEdit() : void send())}
-              disabled={(!text.trim() && !staged) || sending || uploading || recording}
+              disabled={!me || (!text.trim() && !staged) || sending || uploading || recording}
               aria-label={editing ? "Save" : "Send"}
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
             >
               {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <SendHorizontal className="h-5 w-5" />}
-            </button>
+            </Button>
           </div>
         </div>
       </footer>

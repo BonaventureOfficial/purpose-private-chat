@@ -3,7 +3,7 @@ import { Palette, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { Logo } from "@/components/purpose/Logo";
-import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
 import { BACKGROUNDS } from "@/lib/purpose";
 import { listConversations, myId, searchPeople, type Conversation, type PublicProfile } from "@/lib/chat";
 import { cn } from "@/lib/utils";
@@ -45,21 +45,21 @@ function HomePage() {
   const [people, setPeople] = useState<PublicProfile[]>([]);
 
   useEffect(() => {
-    void myId().then(async (id) => {
-      setMe(id);
-      if (id) setConvos(await listConversations(id));
-    });
+    let active = true;
+    let owner: string | null = null;
+    let refreshing = false;
+    const refresh = async () => {
+      if (!owner || !active || refreshing) return;
+      refreshing = true;
+      try { const conversations = await listConversations(owner); if (active) setConvos(conversations); }
+      finally { refreshing = false; }
+    };
+    const onChange = () => { void refresh().catch(() => {}); };
+    void myId().then(async (id) => { owner = id; if (!active) return; setMe(id); if (id) await refresh(); }).catch(() => setConvos([]));
+    window.addEventListener("purpose-vault-change", onChange);
+    window.addEventListener("focus", onChange);
+    return () => { active = false; window.removeEventListener("purpose-vault-change", onChange); window.removeEventListener("focus", onChange); };
   }, []);
-
-  useEffect(() => {
-    if (!me) return;
-    const channel = supabase
-      .channel(`inbox-${me}-${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `recipient_id=eq.${me}` },
-        () => { void listConversations(me).then(setConvos); })
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [me]);
 
   useEffect(() => {
     const t = setTimeout(() => { void searchPeople(q).then(setPeople).catch(() => setPeople([])); }, 250);
@@ -78,14 +78,14 @@ function HomePage() {
           <span className="text-lg font-bold text-foreground">Purpose</span>
         </div>
         <div className="relative">
-          <button onClick={() => setOpen(!open)} aria-label="Background color"
+          <Button variant="ghost" size="icon" onClick={() => setOpen(!open)} aria-label="Background color"
             className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-primary hover:opacity-80">
             <Palette className="h-5 w-5" />
-          </button>
+          </Button>
           {open && (
             <div className="absolute right-0 top-12 z-20 grid w-56 grid-cols-5 gap-2 rounded-2xl bg-popover p-3 shadow-[var(--shadow-soft)] ring-1 ring-border">
               {BACKGROUNDS.map((b) => (
-                <button key={b.name} title={b.name} onClick={() => { setBg(b.value); setOpen(false); }}
+                <Button variant="ghost" size="icon" key={b.name} title={b.name} onClick={() => { setBg(b.value); setOpen(false); }}
                   className={cn("h-8 w-8 rounded-full ring-1 ring-border", bg === b.value && "ring-2 ring-primary")}
                   style={{ backgroundColor: b.value }} />
               ))}

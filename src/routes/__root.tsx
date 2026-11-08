@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { startRelay } from "@/lib/chat";
 import { Toaster } from "@/components/ui/sonner";
 
 import appCss from "../styles.css?url";
@@ -121,6 +122,21 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
+
+  useEffect(() => {
+    let active = true;
+    let owner: string | null = null;
+    let stop: (() => void) | undefined;
+    const apply = (id: string | null) => {
+      if (!active || owner === id) return;
+      stop?.();
+      owner = id;
+      stop = id ? startRelay(id) : undefined;
+    };
+    void supabase.auth.getSession().then(({ data }) => apply(data.session?.user.id ?? null));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => apply(session?.user.id ?? null));
+    return () => { active = false; stop?.(); subscription.unsubscribe(); };
+  }, []);
 
   // Keep the router and query cache in sync with real identity changes only.
   useEffect(() => {
