@@ -28,8 +28,10 @@ export type Database = {
           read_at: string | null
           recipient_hidden: boolean
           recipient_id: string
+          relay_kind: string
           reply_to_id: string | null
           sender_id: string
+          target_id: string | null
         }
         Insert: {
           attachment_name?: string | null
@@ -44,8 +46,10 @@ export type Database = {
           read_at?: string | null
           recipient_hidden?: boolean
           recipient_id: string
+          relay_kind?: string
           reply_to_id?: string | null
           sender_id: string
+          target_id?: string | null
         }
         Update: {
           attachment_name?: string | null
@@ -60,8 +64,10 @@ export type Database = {
           read_at?: string | null
           recipient_hidden?: boolean
           recipient_id?: string
+          relay_kind?: string
           reply_to_id?: string | null
           sender_id?: string
+          target_id?: string | null
         }
         Relationships: [
           {
@@ -69,13 +75,6 @@ export type Database = {
             columns: ["recipient_id"]
             isOneToOne: false
             referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "messages_reply_to_id_fkey"
-            columns: ["reply_to_id"]
-            isOneToOne: false
-            referencedRelation: "messages"
             referencedColumns: ["id"]
           },
           {
@@ -116,6 +115,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      acknowledge_relay: { Args: { item_id: string }; Returns: undefined }
       get_public_profiles: {
         Args: { ids: string[] }
         Returns: {
