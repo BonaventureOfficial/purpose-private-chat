@@ -1,0 +1,4 @@
+- [ ] Add account-scoped IndexedDB history and storage tests.
+- [ ] Replace remote history with save-before-ack relay, receipts, and local editing/deletion.
+- [ ] Connect chat and home to local history without privacy banners.
+- [ ] Verify two-user delivery, remote purging, local reload and tests.
