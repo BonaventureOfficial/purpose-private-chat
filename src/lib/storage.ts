@@ -29,7 +29,7 @@ async function transaction<T>(storeName: string, mode: IDBTransactionMode, work:
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, mode);
     let result: T;
-    tx.oncomplete = () => { db.close(); if (mode === "readwrite") window.dispatchEvent(new Event("purpose-vault-change")); resolve(result); };
+    tx.oncomplete = () => { db.close(); if (mode === "readwrite" && storeName === "messages") window.dispatchEvent(new Event("purpose-vault-change")); resolve(result); };
     tx.onabort = tx.onerror = () => { db.close(); reject(tx.error ?? new Error("Unable to save messages on this device.")); };
     try { work(tx.objectStore(storeName), (value) => { result = value; }); }
     catch (error) { tx.abort(); reject(error); }

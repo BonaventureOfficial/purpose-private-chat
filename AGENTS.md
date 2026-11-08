@@ -18,3 +18,6 @@
 - No Supabase Storage buckets: all app files (avatars, media) are to be handled by Cloudflare per user decision. Do not create storage buckets in Supabase.
 - Signed-in routes (home, profile, mypurpose) live under `src/routes/_authenticated/` gated by the pathless layout `src/routes/_authenticated/route.tsx` (`ssr: false`, redirect to `/signin`). Signup is `/`, sign-in is `/signin`.
 - Media files (avatars, chat media) are uploaded from the browser to the Cloudflare Worker gateway (`MEDIA_GATEWAY` in `src/lib/media.ts`), which verifies the Supabase session token and stores in R2; only the returned URL is saved in Supabase (`profiles.avatar_url`). Why: user wants all files on Cloudflare.
+
+- Message history is account-scoped in IndexedDB; Supabase is only a save-before-ack relay queue with durable local retries and content-free receipts, so offline deliveries are not lost. Relay deletion is authorized as the recipient through an invoker RPC, and edit/delete controls are checked against local original participants.
+- A single root relay lifecycle syncs every signed-in screen; chat and home subscribe to vault updates so they share device history without redundant network subscriptions.
