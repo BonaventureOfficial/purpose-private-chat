@@ -1,10 +1,8 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Check, Eye, EyeOff, Lock, MessageCircle, Shield, Star, Heart, Send, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useServerFn } from "@tanstack/react-start";
 import { Logo } from "./Logo";
 import { isStrongPassword, passwordChecks, syntheticEmail, validateUsername } from "@/lib/purpose";
-import { signUpWithUsername } from "@/lib/auth.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +17,6 @@ const FLOATERS = [
 
 export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
   const nav = useNavigate();
-  const signUpFn = useServerFn(signUpWithUsername);
   const [name, setName] = useState("");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
@@ -48,33 +45,59 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
           setBusy(false);
           return setError("Password does not meet all requirements.");
         }
-        const res = await signUpFn({ data: { username: u, password: pw } });
-        if (!res.ok) {
-          setBusy(false);
-          return setError(res.error);
-        }
-        const { error } = await supabase.auth.signInWithPassword({
+
+        const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
           email: syntheticEmail(u),
           password: pw,
+          options: {
+            data: {
+              username: u,
+            },
+          },
         });
-        if (error) {
+
+        if (signUpErr) {
           setBusy(false);
-          return setError("Account created, but sign-in failed. Please try signing in.");
+          const msg = signUpErr.message.toLowerCase();
+          if (
+            msg.includes("already registered") ||
+            msg.includes("user already exists") ||
+            msg.includes("duplicate") ||
+            msg.includes("unique")
+          ) {
+            return setError("This username is already taken. Try another.");
+          }
+          return setError(signUpErr.message || "Account creation failed. Please try again.");
         }
+
+        // If the session wasn't returned immediately, establish it via sign in
+        if (!signUpData.session) {
+          const { error: signInErr } = await supabase.auth.signInWithPassword({
+            email: syntheticEmail(u),
+            password: pw,
+          });
+          if (signInErr) {
+            setBusy(false);
+            return setError("Account created! Please sign in with your username and password.");
+          }
+        }
+
+        setBusy(false);
         setSuccess(true);
         setTimeout(() => nav({ to: "/home" }), 1200);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { error: signInErr } = await supabase.auth.signInWithPassword({
           email: syntheticEmail(u),
           password: pw,
         });
         setBusy(false);
-        if (error) return setError("Wrong user name or password.");
+        if (signInErr) return setError("Wrong username or password.");
         nav({ to: "/home" });
       }
-    } catch {
+    } catch (err: unknown) {
       setBusy(false);
-      setError("Something went wrong. Please try again.");
+      const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
+      setError(msg);
     }
   }
 
@@ -107,18 +130,40 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
         ) : (
           <form onSubmit={submit} className="space-y-4 rounded-2xl bg-card/90 p-6 shadow-[var(--shadow-soft)] ring-1 ring-border backdrop-blur">
             <label className="block">
-              <span className="text-sm font-medium text-foreground">{mode === "signup" ? "1. Create User Name" : "User Name"}</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} maxLength={30} autoComplete="username"
-                className="mt-1 w-full rounded-xl border border-input bg-background px-4 py-3 outline-none focus:ring-2 focus:ring-ring" placeholder="e.g. purpose_fan" />
+              <span className="text-sm font-medium text-foreground">{mode === "signup" ? "Create Username" : "Username"}</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={30}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="username"
+                className="mt-1 w-full rounded-xl border border-input bg-background px-4 py-3 outline-none focus:ring-2 focus:ring-ring"
+                placeholder="e.g. purpose_fan"
+              />
             </label>
             <label className="block">
-              <span className="text-sm font-medium text-foreground">{mode === "signup" ? "2. Create Password" : "Password"}</span>
+              <span className="text-sm font-medium text-foreground">{mode === "signup" ? "Create Password" : "Password"}</span>
               <div className="relative mt-1">
-                <input type={show ? "text" : "password"} value={pw} onChange={(e) => setPw(e.target.value)} maxLength={64}
+                <input
+                  type={show ? "text" : "password"}
+                  value={pw}
+                  onChange={(e) => setPw(e.target.value)}
+                  maxLength={64}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                  className="w-full rounded-xl border border-input bg-background px-4 py-3 pr-12 outline-none focus:ring-2 focus:ring-ring" placeholder="••••••••" />
-                <button type="button" onClick={() => setShow(!show)} aria-label={show ? "Hide password" : "Show password"}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  className="w-full rounded-xl border border-input bg-background px-4 py-3 pr-12 outline-none focus:ring-2 focus:ring-ring"
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShow(!show)}
+                  aria-label={show ? "Hide password" : "Show password"}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
                   {show ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                 </button>
               </div>
@@ -133,13 +178,19 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
               </ul>
             )}
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <button type="submit" disabled={busy}
-              className="w-full rounded-xl bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60">
+            <button
+              type="submit"
+              disabled={busy}
+              className="w-full rounded-xl bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+            >
               {busy ? "PLEASE WAIT…" : mode === "signup" ? "CONFIRM" : "Sign in"}
             </button>
             <p className="text-center text-sm text-muted-foreground">
-              {mode === "signup" ? (<>Already have an account? <Link to="/signin" className="font-semibold text-primary">Sign in</Link></>)
-                : (<>New here? <Link to="/" className="font-semibold text-primary">Create account</Link></>)}
+              {mode === "signup" ? (
+                <>Already have an account? <Link to="/signin" className="font-semibold text-primary">Sign in</Link></>
+              ) : (
+                <>New here? <Link to="/" className="font-semibold text-primary">Create account</Link></>
+              )}
             </p>
           </form>
         )}
