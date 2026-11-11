@@ -41,6 +41,8 @@ export type Message = {
   attachment_url: string | null;
   attachment_type: "image" | "video" | "pdf" | "audio" | null;
   attachment_name: string | null;
+  attachment_key?: string | null;
+  attachment_iv?: string | null;
   local_status?: "queued" | "sent" | "delivered" | "read";
 };
 
@@ -48,6 +50,8 @@ export type Attachment = {
   url: string;
   type: "image" | "video" | "pdf" | "audio";
   name: string;
+  key?: string | null;
+  iv?: string | null;
 };
 
 export type Conversation = {
@@ -64,12 +68,10 @@ type RelayMessage = Message & {
   target_id: string | null;
 };
 
-/** Hidden for this viewer: the recipient deleted it for themselves. */
 export function isHiddenFor(m: Message, me: string) {
   return m.recipient_id === me && m.recipient_hidden;
 }
 
-/** Grouping label for a message date: Today, Yesterday, weekday (2-6 days), Last week, then month + year. */
 export function dateLabel(iso: string, now = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -158,7 +160,6 @@ async function enqueueControl(
   });
 }
 
-// Consume only after the IndexedDB transaction commits. A failed local write leaves the queue intact.
 export async function consumeRelay(me: string, item: RelayMessage): Promise<void> {
   if (item.recipient_id !== me) return;
 
@@ -174,6 +175,8 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
               url: item.attachment_url,
               type: item.attachment_type ?? "image",
               name: item.attachment_name ?? "file",
+              key: null,
+              iv: null,
             }
           : null,
         reply_to_id: item.reply_to_id,
@@ -194,6 +197,8 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
       attachment_url: payload.attachment?.url ?? null,
       attachment_type: payload.attachment?.type ?? null,
       attachment_name: payload.attachment?.name ?? null,
+      attachment_key: payload.attachment?.key ?? null,
+      attachment_iv: payload.attachment?.iv ?? null,
       local_status: "delivered",
     };
 
@@ -223,6 +228,8 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
           attachment_url: null,
           attachment_type: null,
           attachment_name: null,
+          attachment_key: null,
+          attachment_iv: null,
         });
       }
     } else if (original && original.sender_id === me && original.recipient_id === item.sender_id) {
@@ -254,7 +261,6 @@ export function syncRelay(me: string): Promise<void> {
       await removeRelayOutbox(me, item.id);
     }
 
-    // Drain in order, including control events. Polling also covers realtime disconnects.
     for (;;) {
       const { data, error } = await supabase
         .from("messages")
@@ -274,7 +280,6 @@ export function syncRelay(me: string): Promise<void> {
 
 export function startRelay(me: string): () => void {
   let stopped = false;
-  // Initialize local unextractable E2EE key and publish public key on connect
   void ensureMyE2EEKeys(me).catch((err) => console.error("E2EE key init error:", err));
 
   const sync = () => {
@@ -315,10 +320,8 @@ export async function sendMessage(
   if (text.length > MESSAGE_MAX) throw new Error(`Message is too long (max ${MESSAGE_MAX}).`);
   if (me === to) throw new Error("Choose another contact.");
 
-  // Ensure current user's unextractable E2EE keys are active in IndexedDB
   await ensureMyE2EEKeys(me);
 
-  // Retrieve recipient profile to obtain their public encryption key
   const recipient = await getProfile(to);
   if (!recipient?.public_key) {
     throw new Error(
@@ -326,7 +329,6 @@ export async function sendMessage(
     );
   }
 
-  // Encrypt the payload strictly (AES-256-GCM + ECDH P-256 with Ephemeral sender key)
   const encryptedWire = await encryptE2EE(recipient.public_key, {
     text,
     attachment: att
@@ -334,6 +336,8 @@ export async function sendMessage(
           url: att.url,
           type: att.type,
           name: att.name,
+          key: att.key ?? null,
+          iv: att.iv ?? null,
         }
       : null,
     reply_to_id: replyTo,
@@ -353,11 +357,11 @@ export async function sendMessage(
     attachment_url: att?.url ?? null,
     attachment_type: att?.type ?? null,
     attachment_name: att?.name ?? null,
+    attachment_key: att?.key ?? null,
+    attachment_iv: att?.iv ?? null,
     local_status: "queued",
   };
 
-  // Persist the retry envelope with encrypted wire body.
-  // Sensitive metadata (attachment URL, replyTo) is sealed inside the ciphertext.
   const item: RelayOutboxItem = {
     id: message.id,
     sender_id: me,
@@ -438,6 +442,8 @@ export async function deleteMessage(message: Message, me: string) {
       attachment_url: null,
       attachment_type: null,
       attachment_name: null,
+      attachment_key: null,
+      attachment_iv: null,
     });
     void syncRelay(me).catch(() => {});
   } else if (message.recipient_id === me) {
