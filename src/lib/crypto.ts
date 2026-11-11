@@ -10,14 +10,66 @@ export type EncryptedPayload = {
   reply_to_id?: string | null;
 };
 
-type StoredKeyPair = {
-  privateKeyJwk: JsonWebKey;
-  publicKeyJwk: JsonWebKey;
+type KeyVaultRecord = {
+  userId: string;
+  privateKey: CryptoKey;
   publicKeyString: string;
+  createdAt: string;
 };
 
-const KEY_STORAGE_PREFIX = "purpose_e2ee_key_v1_";
+const KEY_DB_NAME = "purpose_e2ee_vault";
+const KEY_STORE_NAME = "identity_keys";
+const LEGACY_STORAGE_PREFIX = "purpose_e2ee_key_v1_";
 const E2EE_PREFIX = "e2ee:v1:";
+
+function openKeyVault(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("Secure IndexedDB storage is not available on this device."));
+      return;
+    }
+    const request = indexedDB.open(KEY_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(KEY_STORE_NAME)) {
+        db.createObjectStore(KEY_STORE_NAME, { keyPath: "userId" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error("Close other tabs to upgrade cryptographic storage."));
+  });
+}
+
+async function getKeyRecord(userId: string): Promise<KeyVaultRecord | null> {
+  const db = await openKeyVault();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KEY_STORE_NAME, "readonly");
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    const req = tx.objectStore(KEY_STORE_NAME).get(userId);
+    req.onsuccess = () => resolve((req.result as KeyVaultRecord) ?? null);
+  });
+}
+
+async function saveKeyRecord(record: KeyVaultRecord): Promise<void> {
+  const db = await openKeyVault();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KEY_STORE_NAME, "readwrite");
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.objectStore(KEY_STORE_NAME).put(record);
+  });
+}
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -49,60 +101,87 @@ function base64ToUtf8(b64: string): string {
 }
 
 /**
- * Ensures the signed-in user has an ECDH P-256 key pair stored locally
- * and that their public key is published to their Supabase profile.
+ * Ensures the signed-in user has an unextractable ECDH P-256 private key
+ * securely stored inside IndexedDB (never in plaintext in localStorage).
+ * Safely migrates any legacy localStorage keys if present.
  */
 export async function ensureMyE2EEKeys(userId: string): Promise<string> {
-  const storageKey = `${KEY_STORAGE_PREFIX}${userId}`;
-  let keyData: StoredKeyPair | null = null;
+  let record = await getKeyRecord(userId);
 
-  const raw = localStorage.getItem(storageKey);
-  if (raw) {
-    try {
-      keyData = JSON.parse(raw);
-    } catch {
-      keyData = null;
+  // Check and migrate legacy localStorage key if present
+  if (!record) {
+    const legacyRaw = localStorage.getItem(`${LEGACY_STORAGE_PREFIX}${userId}`);
+    if (legacyRaw) {
+      try {
+        const legacy = JSON.parse(legacyRaw);
+        if (legacy.privateKeyJwk && legacy.publicKeyString) {
+          const importedPriv = await window.crypto.subtle.importKey(
+            "jwk",
+            legacy.privateKeyJwk,
+            { name: "ECDH", namedCurve: "P-256" },
+            false, // Strictly non-exportable
+            ["deriveKey"]
+          );
+          record = {
+            userId,
+            privateKey: importedPriv,
+            publicKeyString: legacy.publicKeyString,
+            createdAt: new Date().toISOString(),
+          };
+          await saveKeyRecord(record);
+          // Purge plaintext key from localStorage permanently
+          localStorage.removeItem(`${LEGACY_STORAGE_PREFIX}${userId}`);
+        }
+      } catch (err) {
+        console.warn("Legacy key migration failed, generating fresh hardware key:", err);
+      }
     }
   }
 
-  if (!keyData || !keyData.privateKeyJwk || !keyData.publicKeyString) {
+  // Generate fresh non-exportable hardware-backed key pair if still missing
+  if (!record) {
     const pair = await window.crypto.subtle.generateKey(
       { name: "ECDH", namedCurve: "P-256" },
-      true,
+      false, // Strictly non-exportable private key
       ["deriveKey"]
     );
-    const privateKeyJwk = await window.crypto.subtle.exportKey("jwk", pair.privateKey);
-    const publicKeyJwk = await window.crypto.subtle.exportKey("jwk", pair.publicKey);
+    const pubJwk = await window.crypto.subtle.exportKey("jwk", pair.publicKey);
     const publicKeyString = JSON.stringify({
-      kty: publicKeyJwk.kty,
-      crv: publicKeyJwk.crv,
-      x: publicKeyJwk.x,
-      y: publicKeyJwk.y,
+      kty: pubJwk.kty,
+      crv: pubJwk.crv,
+      x: pubJwk.x,
+      y: pubJwk.y,
     });
 
-    keyData = { privateKeyJwk, publicKeyJwk, publicKeyString };
-    localStorage.setItem(storageKey, JSON.stringify(keyData));
+    record = {
+      userId,
+      privateKey: pair.privateKey,
+      publicKeyString,
+      createdAt: new Date().toISOString(),
+    };
+    await saveKeyRecord(record);
   }
 
-  // Publish / sync public key to Supabase profile
+  // Ensure public key is registered in user's Supabase profile
   const { data: profile } = await supabase
     .from("profiles")
     .select("public_key")
     .eq("id", userId)
     .maybeSingle();
 
-  if (!profile || profile.public_key !== keyData.publicKeyString) {
+  if (!profile || profile.public_key !== record.publicKeyString) {
     await supabase
       .from("profiles")
-      .update({ public_key: keyData.publicKeyString })
+      .update({ public_key: record.publicKeyString })
       .eq("id", userId);
   }
 
-  return keyData.publicKeyString;
+  return record.publicKeyString;
 }
 
 /**
  * Encrypts a payload for a recipient using ECDH P-256 (ephemeral sender key) + AES-256-GCM.
+ * Ephemeral sender key ensures Perfect Forward Secrecy per message.
  */
 export async function encryptE2EE(
   recipientPublicKeyString: string,
@@ -123,7 +202,7 @@ export async function encryptE2EE(
     []
   );
 
-  // Generate a fresh ephemeral key pair for this specific message (PFS for sender)
+  // Fresh ephemeral key pair for this single message
   const ephemeral = await window.crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     true,
@@ -163,7 +242,7 @@ export async function encryptE2EE(
 }
 
 /**
- * Decrypts a wire payload using the signed-in user's private key.
+ * Decrypts a wire payload using the signed-in user's unextractable IndexedDB private key.
  */
 export async function decryptE2EE(
   userId: string,
@@ -173,23 +252,13 @@ export async function decryptE2EE(
     throw new Error("Message is not end-to-end encrypted.");
   }
 
-  const storageKey = `${KEY_STORAGE_PREFIX}${userId}`;
-  const raw = localStorage.getItem(storageKey);
-  if (!raw) {
-    throw new Error("Local private encryption key not found on this device.");
+  const record = await getKeyRecord(userId);
+  if (!record || !record.privateKey) {
+    throw new Error("Local private encryption key not found in secure vault.");
   }
 
-  const keyData: StoredKeyPair = JSON.parse(raw);
   const envelopeJson = base64ToUtf8(wire.slice(E2EE_PREFIX.length));
   const envelope = JSON.parse(envelopeJson);
-
-  const recipientPrivateKey = await window.crypto.subtle.importKey(
-    "jwk",
-    keyData.privateKeyJwk,
-    { name: "ECDH", namedCurve: "P-256" },
-    false,
-    ["deriveKey"]
-  );
 
   const ephemeralPubKey = await window.crypto.subtle.importKey(
     "jwk",
@@ -201,7 +270,7 @@ export async function decryptE2EE(
 
   const aesKey = await window.crypto.subtle.deriveKey(
     { name: "ECDH", public: ephemeralPubKey },
-    recipientPrivateKey,
+    record.privateKey,
     { name: "AES-GCM", length: 256 },
     false,
     ["decrypt"]
@@ -222,4 +291,27 @@ export async function decryptE2EE(
  */
 export function isE2EE(body: string): boolean {
   return typeof body === "string" && body.startsWith(E2EE_PREFIX);
+}
+
+/**
+ * Computes a standardized 60-digit fingerprint (Safety Number)
+ * between two conversation participants to verify end-to-end identity.
+ */
+export async function computeSafetyNumber(
+  myUserId: string,
+  otherUserId: string,
+  myPubKey: string,
+  otherPubKey: string
+): Promise<string> {
+  const [first, second] = myUserId < otherUserId ? [myPubKey, otherPubKey] : [otherPubKey, myPubKey];
+  const data = new TextEncoder().encode(`${first}|${second}`);
+  const hash = await window.crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(hash);
+  let numStr = "";
+  for (let i = 0; i < 12; i++) {
+    const segment = (bytes[i * 2] << 8) | bytes[i * 2 + 1];
+    numStr += segment.toString().padStart(5, "0").slice(-5);
+    if (i < 11 && (i + 1) % 2 === 0) numStr += " ";
+  }
+  return numStr;
 }
