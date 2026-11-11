@@ -1,12 +1,16 @@
 import { supabase } from "@/integrations/supabase/client";
 
+export type EncryptedAttachment = {
+  url: string;
+  type: "image" | "video" | "pdf" | "audio";
+  name: string;
+  key?: string | null;
+  iv?: string | null;
+};
+
 export type EncryptedPayload = {
   text: string;
-  attachment?: {
-    url: string;
-    type: "image" | "video" | "pdf" | "audio";
-    name: string;
-  } | null;
+  attachment?: EncryptedAttachment | null;
   reply_to_id?: string | null;
 };
 
@@ -108,7 +112,6 @@ function base64ToUtf8(b64: string): string {
 export async function ensureMyE2EEKeys(userId: string): Promise<string> {
   let record = await getKeyRecord(userId);
 
-  // Check and migrate legacy localStorage key if present
   if (!record) {
     const legacyRaw = localStorage.getItem(`${LEGACY_STORAGE_PREFIX}${userId}`);
     if (legacyRaw) {
@@ -119,7 +122,7 @@ export async function ensureMyE2EEKeys(userId: string): Promise<string> {
             "jwk",
             legacy.privateKeyJwk,
             { name: "ECDH", namedCurve: "P-256" },
-            false, // Strictly non-exportable
+            false,
             ["deriveKey"]
           );
           record = {
@@ -129,7 +132,6 @@ export async function ensureMyE2EEKeys(userId: string): Promise<string> {
             createdAt: new Date().toISOString(),
           };
           await saveKeyRecord(record);
-          // Purge plaintext key from localStorage permanently
           localStorage.removeItem(`${LEGACY_STORAGE_PREFIX}${userId}`);
         }
       } catch (err) {
@@ -138,11 +140,10 @@ export async function ensureMyE2EEKeys(userId: string): Promise<string> {
     }
   }
 
-  // Generate fresh non-exportable hardware-backed key pair if still missing
   if (!record) {
     const pair = await window.crypto.subtle.generateKey(
       { name: "ECDH", namedCurve: "P-256" },
-      false, // Strictly non-exportable private key
+      false,
       ["deriveKey"]
     );
     const pubJwk = await window.crypto.subtle.exportKey("jwk", pair.publicKey);
@@ -162,7 +163,6 @@ export async function ensureMyE2EEKeys(userId: string): Promise<string> {
     await saveKeyRecord(record);
   }
 
-  // Ensure public key is registered in user's Supabase profile
   const { data: profile } = await supabase
     .from("profiles")
     .select("public_key")
@@ -181,7 +181,6 @@ export async function ensureMyE2EEKeys(userId: string): Promise<string> {
 
 /**
  * Encrypts a payload for a recipient using ECDH P-256 (ephemeral sender key) + AES-256-GCM.
- * Ephemeral sender key ensures Perfect Forward Secrecy per message.
  */
 export async function encryptE2EE(
   recipientPublicKeyString: string,
@@ -202,7 +201,6 @@ export async function encryptE2EE(
     []
   );
 
-  // Fresh ephemeral key pair for this single message
   const ephemeral = await window.crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     true,
@@ -286,17 +284,108 @@ export async function decryptE2EE(
   return JSON.parse(decryptedText) as EncryptedPayload;
 }
 
-/**
- * Checks whether a wire message body is an E2EE envelope.
- */
 export function isE2EE(body: string): boolean {
   return typeof body === "string" && body.startsWith(E2EE_PREFIX);
 }
 
 /**
- * Computes a standardized 60-digit fingerprint (Safety Number)
- * between two conversation participants to verify end-to-end identity.
+ * Encrypts an attachment file client-side using AES-256-GCM before uploading to Cloudflare R2.
+ * Generates an independent symmetric key and 12-byte IV for this specific file.
  */
+export async function encryptAttachment(file: File): Promise<{
+  encryptedFile: File;
+  key: string;
+  iv: string;
+}> {
+  const aesKey = await window.crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+  const rawKey = await window.crypto.subtle.exportKey("raw", aesKey);
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+  const plaintextBuffer = await file.arrayBuffer();
+  const ciphertextBuffer = await window.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    aesKey,
+    plaintextBuffer
+  );
+
+  const encryptedFile = new File([ciphertextBuffer], file.name, {
+    type: file.type || "application/octet-stream",
+  });
+
+  return {
+    encryptedFile,
+    key: bytesToBase64(new Uint8Array(rawKey)),
+    iv: bytesToBase64(iv),
+  };
+}
+
+/**
+ * Decrypts an attachment from raw ciphertext ArrayBuffer using AES-256-GCM.
+ */
+export async function decryptAttachment(
+  ciphertext: ArrayBuffer,
+  keyB64: string,
+  ivB64: string,
+  mimeType = "application/octet-stream"
+): Promise<Blob> {
+  const keyBytes = base64ToBytes(keyB64);
+  const ivBytes = base64ToBytes(ivB64);
+
+  const aesKey = await window.crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"]
+  );
+
+  const plaintextBuffer = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: ivBytes },
+    aesKey,
+    ciphertext
+  );
+
+  return new Blob([plaintextBuffer], { type: mimeType });
+}
+
+const decryptedMediaCache = new Map<string, string>();
+
+export function getCachedDecryptedMedia(url: string): string | undefined {
+  return decryptedMediaCache.get(url);
+}
+
+export function cacheDecryptedMedia(url: string, blobUrl: string): void {
+  decryptedMediaCache.set(url, blobUrl);
+}
+
+/**
+ * Downloads an encrypted media file from Cloudflare R2 and decrypts it with AES-256-GCM.
+ */
+export async function downloadAndDecryptMedia(
+  url: string,
+  keyB64: string,
+  ivB64: string,
+  mimeType = "application/octet-stream"
+): Promise<string> {
+  const cached = decryptedMediaCache.get(url);
+  if (cached) return cached;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to download media (${res.status})`);
+  }
+
+  const ciphertext = await res.arrayBuffer();
+  const decryptedBlob = await decryptAttachment(ciphertext, keyB64, ivB64, mimeType);
+  const blobUrl = URL.createObjectURL(decryptedBlob);
+  decryptedMediaCache.set(url, blobUrl);
+  return blobUrl;
+}
+
 export async function computeSafetyNumber(
   myUserId: string,
   otherUserId: string,
