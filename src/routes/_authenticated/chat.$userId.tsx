@@ -47,6 +47,12 @@ import {
 } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 import { uploadMedia, validateFile, type FileKind } from "@/lib/media";
+import {
+  encryptAttachment,
+  downloadAndDecryptMedia,
+  getCachedDecryptedMedia,
+  cacheDecryptedMedia,
+} from "@/lib/crypto";
 import { useBackground } from "@/components/purpose/AppShell";
 import { isDarkBackground } from "@/lib/purpose";
 
@@ -68,7 +74,6 @@ function time(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** WhatsApp-style formatting renderer: *bold*, _italic_, ~strikethrough~, `code`, ```codeblock``` */
 function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) {
   if (!text) return null;
   const pattern = /(```[\s\S]+?```|`[^`\n]+`|\*[^\s*](?:[^*]*?[^\s*])?\*|_[^\s_](?:[^_]*?[^\s_])?_|~[^\s~](?:[^~]*?[^\s~])?~)/g;
@@ -131,7 +136,6 @@ function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) 
   );
 }
 
-/** Delivery ticks: dark red single check while sending, white double check when delivered, dark green double check when read. */
 function Ticks({ sending, read }: { sending: boolean; read: boolean }) {
   if (sending) return <Check className="h-3.5 w-3.5 text-destructive" aria-label="Sending" />;
   const color = read ? "text-online" : "text-primary-foreground";
@@ -143,29 +147,181 @@ function Ticks({ sending, read }: { sending: boolean; read: boolean }) {
   );
 }
 
+function DecryptedAttachment({
+  url,
+  type,
+  name,
+  encKey,
+  iv,
+  mine,
+}: {
+  url: string;
+  type: "image" | "video" | "pdf" | "audio";
+  name: string | null;
+  encKey?: string | null;
+  iv?: string | null;
+  mine: boolean;
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(() => {
+    if (!encKey || !iv) return url;
+    return getCachedDecryptedMedia(url) ?? null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (!encKey || !iv) return false;
+    return !getCachedDecryptedMedia(url);
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!encKey || !iv) {
+      setBlobUrl(url);
+      setLoading(false);
+      return;
+    }
+    const cached = getCachedDecryptedMedia(url);
+    if (cached) {
+      setBlobUrl(cached);
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    setLoading(true);
+    setError(null);
+
+    const mime =
+      type === "image"
+        ? "image/jpeg"
+        : type === "video"
+        ? "video/mp4"
+        : type === "audio"
+        ? "audio/webm"
+        : "application/pdf";
+
+    downloadAndDecryptMedia(url, encKey, iv, mime)
+      .then((decryptedUrl) => {
+        if (active) {
+          setBlobUrl(decryptedUrl);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          console.error("Failed to decrypt attachment:", err);
+          setError("Failed to decrypt media");
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [url, encKey, iv, type]);
+
+  if (loading) {
+    return (
+      <div className="flex h-24 w-40 items-center justify-center rounded-xl bg-black/10">
+        <Loader2 className="h-5 w-5 animate-spin opacity-60" />
+      </div>
+    );
+  }
+
+  if (error || !blobUrl) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl bg-destructive/15 px-3 py-2 text-xs text-destructive">
+        <Lock className="h-4 w-4" />
+        <span>{error ?? "Encrypted media unavailable"}</span>
+      </div>
+    );
+  }
+
+  return (
+    <span className="mb-1 block">
+      {type === "image" && (
+        <a href={blobUrl} target="_blank" rel="noreferrer">
+          <img
+            src={blobUrl}
+            alt={name ?? "Image"}
+            className="max-h-72 rounded-xl object-cover"
+            loading="lazy"
+          />
+        </a>
+      )}
+      {type === "video" && (
+        <video src={blobUrl} controls preload="metadata" className="max-h-72 rounded-xl" />
+      )}
+      {type === "audio" && (
+        <audio src={blobUrl} controls preload="metadata" className="w-64 max-w-full" />
+      )}
+      {type === "pdf" && (
+        <a
+          href={blobUrl}
+          target="_blank"
+          download={name ?? "Document.pdf"}
+          rel="noreferrer"
+          className={cn(
+            "flex items-center gap-2 rounded-xl px-3 py-2",
+            mine ? "bg-primary-foreground/10" : "bg-secondary"
+          )}
+        >
+          <FileText className="h-6 w-6 shrink-0" />
+          <span className="truncate text-sm font-medium">{name ?? "Document.pdf"}</span>
+        </a>
+      )}
+    </span>
+  );
+}
+
 function ChatPage() {
   const { userId } = Route.useParams();
-  const [bg] = useBackground();
-  const isDark = isDarkBackground(bg);
-  const [me, setMe] = useState<string | null>(null);
-  const [other, setOther] = useState<PublicProfile | null>(null);
+  const { theme } = useBackground();
+  const darkWall = isDarkBackground(theme);
+  const [partner, setPartner] = useState<PublicProfile | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const [pending, setPending] = useState<Message[]>([]);
+  const [text, setText] = useState("");
+  const [me, setMe] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [staged, setStaged] = useState<{ file: File; kind: FileKind } | null>(null);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const camRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [staged, setStaged] = useState<{ file: File; kind: FileKind; preview: string } | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const recRef = useRef<MediaRecorder | null>(null);
   const cancelRecRef = useRef(false);
+
+  useEffect(() => {
+    void myId().then(setMe);
+    void getProfile(userId).then(setPartner);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!me) return;
+    const load = () => {
+      void loadThread(me, userId).then((list) => {
+        setMsgs(list);
+        setPending((prev) => prev.filter((p) => !list.some((real) => real.id === p.id)));
+      });
+    };
+    load();
+    window.addEventListener("purpose-vault-change", load);
+    return () => window.removeEventListener("purpose-vault-change", load);
+  }, [me, userId]);
+
+  useEffect(() => {
+    if (me) void markRead(me, userId);
+  }, [me, userId, msgs.length]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs.length, pending.length]);
 
   useEffect(() => {
     if (!recording) return;
@@ -173,46 +329,13 @@ function ChatPage() {
     return () => clearInterval(t);
   }, [recording]);
 
-  useEffect(() => () => { if (staged) URL.revokeObjectURL(staged.preview); }, [staged]);
-
-  useEffect(() => {
-    let active = true;
-    let owner: string | null = null;
-    let reading = false;
-    const refresh = async () => {
-      if (!owner || !active) return;
-      const messages = await loadThread(owner, userId);
-      if (!active) return;
-      setMsgs(messages);
-      if (!reading && document.visibilityState === "visible" && messages.some((m) => m.recipient_id === owner && !m.read_at && !m.deleted_at)) {
-        reading = true;
-        try { await markRead(owner, userId); } finally { reading = false; }
-      }
-    };
-    const onChange = () => { void refresh().catch((error) => setErr(error instanceof Error ? error.message : "Unable to load messages.")); };
-    setMsgs([]);
-    void (async () => {
-      const id = await myId();
-      if (!active || !id) return;
-      owner = id;
-      setMe(id);
-      setOther(await getProfile(userId));
-      await refresh();
-    })().catch((error) => setErr(error instanceof Error ? error.message : "Unable to load messages."));
-    window.addEventListener("purpose-vault-change", onChange);
-    document.addEventListener("visibilitychange", onChange);
-    return () => { active = false; window.removeEventListener("purpose-vault-change", onChange); document.removeEventListener("visibilitychange", onChange); };
-  }, [userId]);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs, pending]);
-
   async function stageFile(file: File) {
     try {
       const kind = await validateFile(file);
-      setStaged({ file, kind, preview: URL.createObjectURL(file) });
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unsupported file."); }
+      setStaged({ file, kind });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unsupported file.");
+    }
   }
 
   async function startRecording() {
@@ -223,7 +346,9 @@ function ChatPage() {
       const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       const chunks: Blob[] = [];
       cancelRecRef.current = false;
-      rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         if (cancelRecRef.current) return;
@@ -277,12 +402,16 @@ function ChatPage() {
     if (staged) {
       setUploading(true);
       try {
-        const up = await uploadMedia(staged.file, "media");
+        const { encryptedFile, key, iv } = await encryptAttachment(staged.file);
+        const up = await uploadMedia(encryptedFile, "media");
         att = {
           url: up,
           type: staged.kind,
           name: staged.file.name,
+          key,
+          iv,
         };
+        cacheDecryptedMedia(up, URL.createObjectURL(staged.file));
       } catch (e) {
         setUploading(false);
         setSending(false);
@@ -303,6 +432,8 @@ function ChatPage() {
       attachment_url: att?.url ?? null,
       attachment_type: att?.type ?? null,
       attachment_name: att?.name ?? null,
+      attachment_key: att?.key ?? null,
+      attachment_iv: att?.iv ?? null,
       created_at: new Date().toISOString(),
       read_at: null,
       edited_at: null,
@@ -360,80 +491,98 @@ function ChatPage() {
     }
   }
 
-  async function onCopy(m: Message) {
-    try {
-      await navigator.clipboard.writeText(m.body);
-      toast.success("Copied");
-    } catch {
-      toast.error("Could not copy.");
-    }
-  }
-
-  const name = other?.username ?? "…";
+  const name = partner?.username ?? "Chat";
   const display = [...msgs, ...pending];
-  const hasFormattingInText = /[*_~`]/.test(text);
 
   return (
     <div
       className={cn(
-        "relative flex h-dvh flex-col transition-colors duration-200",
-        isDark && "dark text-foreground"
+        "relative flex h-[100dvh] flex-col overflow-hidden text-foreground",
+        darkWall ? "bg-black/85" : "bg-background/80"
       )}
-      style={{ backgroundColor: bg }}
     >
-      <header className="relative z-10 shrink-0 border-b border-border bg-background/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-2xl items-center gap-3 px-3 py-2.5">
-          <Link to="/home" aria-label="Back" className="flex h-10 w-10 items-center justify-center rounded-full text-primary hover:bg-secondary">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 -z-10 flex items-center justify-center overflow-hidden opacity-[0.035]"
+      >
+        <svg viewBox="0 0 200 200" className="h-[75vmin] w-[75vmin] fill-current">
+          <path d="M100 20a40 40 0 0 0-40 40v20H50a20 20 0 0 0-20 20v60a20 20 0 0 0 20 20h100a20 20 0 0 0 20-20v-60a20 20 0 0 0-20-20h-10V60a40 40 0 0 0-40-40zm-24 40a24 24 0 0 1 48 0v20H76V60zm24 60a12 12 0 0 1 6 22.4V152a6 6 0 1 1-12 0v-9.6A12 12 0 0 1 100 120z" />
+        </svg>
+      </div>
+
+      <header
+        className={cn(
+          "sticky top-0 z-20 flex items-center justify-between border-b px-4 py-3 backdrop-blur-md",
+          darkWall ? "border-white/10 bg-black/40 text-white" : "border-border/60 bg-background/70 text-foreground"
+        )}
+      >
+        <div className="flex items-center gap-3">
+          <Link
+            to="/"
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-full transition",
+              darkWall ? "hover:bg-white/10" : "hover:bg-muted"
+            )}
+            aria-label="Back to chats"
+          >
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          {other?.avatar_url ? (
-            <img src={other.avatar_url} alt={name} className="h-11 w-11 rounded-full object-cover" />
-          ) : (
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 font-semibold text-primary">{name[0]?.toUpperCase()}</div>
-          )}
-          <div className="min-w-0">
-            <p className="truncate font-semibold text-foreground">{name}</p>
-            <p className="flex items-center gap-1 text-xs text-muted-foreground"><Lock className="h-3 w-3" /> Private conversation</p>
+          <div className="flex items-center gap-2.5">
+            {partner?.avatar_url ? (
+              <img src={partner.avatar_url} alt={name} className="h-9 w-9 rounded-full object-cover" />
+            ) : (
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground text-sm">
+                {name.slice(0, 1).toUpperCase()}
+              </div>
+            )}
+            <div>
+              <p className="font-semibold text-sm leading-tight">{name}</p>
+              <p className="flex items-center gap-1 text-[11px] opacity-75">
+                <Lock className="h-3 w-3 text-online" /> End-to-end encrypted
+              </p>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="relative flex-1 overflow-y-auto">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 opacity-[0.035] text-foreground dark:opacity-[0.055]"
-          style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='48' height='48' viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M24 16c-2.2 0-4 1.8-4 4v2h-1c-.6 0-1 .4-1 1v7c0 .6.4 1 1 1h10c.6 0 1-.4 1-1v-7c0-.6-.4-1-1-1h-1v-2c0-2.2-1.8-4-4-4zm-2 4c0-1.1.9-2 2-2s2 .9 2 2v2h-4v-2zm2 7a1 1 0 100-2 1 1 0 000 2z' fill='currentColor' fill-rule='evenodd'/%3E%3Ccircle cx='4' cy='4' r='1' fill='currentColor'/%3E%3Ccircle cx='44' cy='44' r='1' fill='currentColor'/%3E%3C/svg%3E")`,
-            backgroundSize: "48px 48px",
-          }}
-        />
-        <div className="relative z-10 mx-auto flex max-w-2xl flex-col gap-1.5 px-3 py-4">
-          {display.length === 0 && (
-            <p className="py-10 text-center text-sm text-muted-foreground">Say hello to {name} 👋</p>
-          )}
-          {display.map((m, i) => {
+      <main className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {display.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground text-sm">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <Lock className="h-6 w-6" />
+            </div>
+            <p className="font-medium text-foreground">No messages yet</p>
+            <p className="text-xs">Messages and attachments are end-to-end encrypted before leaving this device.</p>
+          </div>
+        ) : (
+          display.map((m, i) => {
             const mine = m.sender_id === me;
-            const label = dateLabel(m.created_at);
-            const prevLabel = i > 0 ? dateLabel(display[i - 1]?.created_at ?? m.created_at) : null;
             const isPending = m.id.startsWith("pending-");
             const awaitingDelivery = isPending || m.local_status === "queued" || m.local_status === "sent";
+            const prev = display[i - 1];
+            const showDate = !prev || dateLabel(prev.created_at) !== dateLabel(m.created_at);
 
             return (
               <Fragment key={m.id}>
-                {label !== prevLabel && (
-                  <div className="flex justify-center py-2">
-                    <span className="rounded-full bg-background/85 px-3 py-1 text-xs font-medium text-muted-foreground shadow-xs ring-1 ring-border backdrop-blur-sm">
-                      {label}
+                {showDate && (
+                  <div className="my-2 flex justify-center">
+                    <span
+                      className={cn(
+                        "rounded-full px-2.5 py-0.5 font-medium text-[11px] shadow-sm backdrop-blur",
+                        darkWall ? "bg-white/10 text-white/80" : "bg-muted/80 text-muted-foreground"
+                      )}
+                    >
+                      {dateLabel(m.created_at)}
                     </span>
                   </div>
                 )}
-                <div className={cn("group flex items-start gap-1", mine ? "flex-row-reverse" : "flex-row")}>
+                <div className={cn("group flex items-start gap-1", mine ? "justify-end" : "justify-start")}>
                   <div
                     className={cn(
-                      "max-w-[78%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[15px] shadow-sm",
+                      "relative max-w-[80%] rounded-2xl px-3.5 py-2 text-sm shadow-sm break-words",
                       mine
-                        ? "rounded-br-md bg-primary text-primary-foreground shadow-xs"
-                        : "rounded-bl-md bg-card/95 text-foreground shadow-xs ring-1 ring-border backdrop-blur-xs"
+                        ? "rounded-tr-none bg-primary text-primary-foreground"
+                        : "rounded-tl-none bg-card text-card-foreground border border-border/40"
                     )}
                   >
                     {m.reply_to_id && (() => {
@@ -456,30 +605,14 @@ function ChatPage() {
                     })()}
 
                     {!m.deleted_at && m.attachment_url && (
-                      <span className="mb-1 block">
-                        {m.attachment_type === "image" && (
-                          <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                            <img src={m.attachment_url} alt={m.attachment_name ?? "Image"} className="max-h-72 rounded-xl object-cover" loading="lazy" />
-                          </a>
-                        )}
-                        {m.attachment_type === "video" && (
-                          <video src={m.attachment_url} controls preload="metadata" className="max-h-72 rounded-xl" />
-                        )}
-                        {m.attachment_type === "audio" && (
-                          <audio src={m.attachment_url} controls preload="metadata" className="w-64 max-w-full" />
-                        )}
-                        {m.attachment_type === "pdf" && (
-                          <a
-                            href={m.attachment_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={cn("flex items-center gap-2 rounded-xl px-3 py-2", mine ? "bg-primary-foreground/10" : "bg-secondary")}
-                          >
-                            <FileText className="h-6 w-6 shrink-0" />
-                            <span className="truncate text-sm font-medium">{m.attachment_name ?? "Document.pdf"}</span>
-                          </a>
-                        )}
-                      </span>
+                      <DecryptedAttachment
+                        url={m.attachment_url}
+                        type={m.attachment_type ?? "image"}
+                        name={m.attachment_name}
+                        encKey={m.attachment_key}
+                        iv={m.attachment_iv}
+                        mine={mine}
+                      />
                     )}
 
                     {m.deleted_at ? (
@@ -489,7 +622,12 @@ function ChatPage() {
                     )}
 
                     {m.edited_at && !m.deleted_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
-                    <span className={cn("ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10px]", mine ? "text-primary-foreground/70" : "text-muted-foreground")}>
+                    <span
+                      className={cn(
+                        "ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10px]",
+                        mine ? "text-primary-foreground/70" : "text-muted-foreground"
+                      )}
+                    >
                       {time(m.created_at)}
                       {mine && <Ticks sending={awaitingDelivery} read={!isPending && !!m.read_at} />}
                     </span>
@@ -525,13 +663,19 @@ function ChatPage() {
                         >
                           <CornerUpLeft className="h-4 w-4" /> Reply
                         </DropdownMenuItem>
-                        {m.body && (
-                          <DropdownMenuItem onSelect={() => void onCopy(m)}>
-                            <Copy className="h-4 w-4" /> Copy
-                          </DropdownMenuItem>
-                        )}
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            void navigator.clipboard.writeText(m.body);
+                            toast.success("Copied to clipboard");
+                          }}
+                        >
+                          <Copy className="h-4 w-4" /> Copy
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={() => void onDelete(m)} className="text-destructive focus:text-destructive">
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => void onDelete(m)}
+                        >
                           <Trash2 className="h-4 w-4" /> Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -540,208 +684,228 @@ function ChatPage() {
                 </div>
               </Fragment>
             );
-          })}
-          <div ref={endRef} />
-        </div>
+          })
+        )}
+        <div ref={bottomRef} />
       </main>
 
-      <footer className="relative z-10 shrink-0 border-t border-border bg-background/90 backdrop-blur-md">
-        <div className="mx-auto max-w-2xl px-3 py-3">
-          {err && <p className="mb-2 text-xs text-destructive">{err}</p>}
+      <footer
+        className={cn(
+          "sticky bottom-0 z-20 border-t p-3 backdrop-blur-md",
+          darkWall ? "border-white/10 bg-black/40" : "border-border/60 bg-background/80"
+        )}
+      >
+        {replyTo && (
+          <div className="mb-2 flex items-center justify-between rounded-lg bg-secondary/80 px-3 py-1.5 text-xs text-secondary-foreground">
+            <div className="truncate">
+              <span className="font-semibold">{replyTo.sender_id === me ? "Replying to yourself" : `Replying to ${name}`}: </span>
+              <span className="opacity-80">{replyTo.body || "Attachment"}</span>
+            </div>
+            <button onClick={() => setReplyTo(null)} className="p-1 hover:opacity-70" aria-label="Cancel reply">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
-          {(editing || replyTo) && (
-            <div className="mb-2 flex items-center gap-2 rounded-xl border-l-4 border-primary bg-secondary px-3 py-1.5 text-xs">
-              {editing ? <Pencil className="h-3.5 w-3.5 text-primary" /> : <CornerUpLeft className="h-3.5 w-3.5 text-primary" />}
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-primary">
-                  {editing
-                    ? "Editing message"
-                    : replyTo?.sender_id === me
-                    ? "Replying to yourself"
-                    : `Replying to ${name}`}
-                </p>
-                <p className="truncate text-muted-foreground">{(editing ?? replyTo)?.body}</p>
-              </div>
+        {editing && (
+          <div className="mb-2 flex items-center justify-between rounded-lg bg-primary/10 px-3 py-1.5 text-xs text-primary">
+            <span>Editing message</span>
+            <button
+              onClick={() => {
+                setEditing(null);
+                setText("");
+              }}
+              className="p-1 hover:opacity-70"
+              aria-label="Cancel edit"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {staged && (
+          <div className="mb-2 flex items-center justify-between rounded-lg bg-secondary px-3 py-1.5 text-xs">
+            <span className="truncate">
+              Attached ({staged.kind}): <strong>{staged.file.name}</strong>
+            </span>
+            <button onClick={() => setStaged(null)} className="p-1 hover:opacity-70" aria-label="Remove attachment">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {err && <p className="mb-2 text-destructive text-xs">{err}</p>}
+
+        <div className="mb-1.5 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => applyFormat("*")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Bold (*text*)"
+          >
+            <Bold className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFormat("_")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Italic (_text_)"
+          >
+            <Italic className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFormat("~")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Strikethrough (~text~)"
+          >
+            <Strikethrough className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFormat("`")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Code (`code`)"
+          >
+            <CodeIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*,video/*,application/pdf,audio/*"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void stageFile(f);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*"
+            capture="environment"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void stageFile(f);
+              e.target.value = "";
+            }}
+          />
+
+          {!recording && (
+            <div className="flex items-center gap-1">
               <Button
+                type="button"
                 variant="ghost"
                 size="icon"
-                aria-label="Cancel"
-                onClick={() => {
-                  if (editing) setText("");
-                  setEditing(null);
-                  setReplyTo(null);
-                }}
-                className="rounded-full p-1 hover:bg-background"
+                className="h-10 w-10 shrink-0 rounded-full"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || uploading}
+                aria-label="Attach file"
               >
-                <X className="h-4 w-4" />
+                <Paperclip className="h-5 w-5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 shrink-0 rounded-full"
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={sending || uploading}
+                aria-label="Take photo"
+              >
+                <Camera className="h-5 w-5" />
               </Button>
             </div>
           )}
 
-          {hasFormattingInText && (
-            <div className="mb-2 flex items-center gap-2 rounded-xl border border-border bg-secondary/80 px-3 py-1.5 text-xs text-foreground backdrop-blur-xs">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Preview:</span>
-              <span className="min-w-0 flex-1 truncate font-medium">
-                <FormattedMessage text={text} />
+          {recording ? (
+            <div className="flex flex-1 items-center justify-between rounded-2xl bg-destructive/10 px-4 py-2 text-destructive text-sm">
+              <span className="flex items-center gap-2">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" />
+                Recording voice note... {recSecs}s
               </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => stopRecording(true)}
+                  className="h-8 text-destructive hover:bg-destructive/15 text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => stopRecording(false)}
+                  className="h-8 bg-destructive text-destructive-foreground hover:bg-destructive/90 text-xs"
+                >
+                  <Square className="mr-1 h-3 w-3" /> Finish
+                </Button>
+              </div>
             </div>
-          )}
-
-          {recording && (
-            <div className="mb-2 flex items-center gap-2 rounded-xl bg-secondary px-3 py-2 text-sm">
-              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-destructive" />
-              <span className="flex-1 font-medium text-foreground">
-                Recording… {Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, "0")}
-              </span>
-              <Button variant="ghost" size="icon" onClick={() => stopRecording(true)} aria-label="Cancel recording" className="rounded-full p-1 hover:bg-background">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
-
-          {staged && (
-            <div className="mb-2 flex items-center gap-3 rounded-xl bg-secondary p-2">
-              {staged.kind === "image" && <img src={staged.preview} alt="" className="h-16 w-16 rounded-lg object-cover" />}
-              {staged.kind === "video" && <video src={staged.preview} className="h-16 w-16 rounded-lg object-cover" muted />}
-              {staged.kind === "pdf" && <FileText className="h-10 w-10 text-primary" />}
-              {staged.kind === "audio" && <audio src={staged.preview} controls className="h-10 max-w-[220px]" />}
-              <p className="min-w-0 flex-1 truncate text-sm text-foreground">{staged.kind === "audio" ? "Voice message" : staged.file.name}</p>
-              <Button variant="ghost" size="icon" onClick={() => setStaged(null)} disabled={uploading} aria-label="Remove file" className="rounded-full p-1 hover:bg-background">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
-
-          <div className="flex items-end gap-1.5 rounded-2xl border-2 border-primary/30 bg-background p-1.5 shadow-sm transition focus-within:border-primary">
-            <input
-              ref={fileRef}
-              type="file"
-              hidden
-              accept="image/*,video/*,application/pdf"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void stageFile(f);
-              }}
-            />
-            <input
-              ref={camRef}
-              type="file"
-              hidden
-              accept="image/*,video/*"
-              capture="environment"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void stageFile(f);
-              }}
-            />
-
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading || recording || !!editing || !!staged}
-              aria-label="Attach file"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40"
-            >
-              <Paperclip className="h-5 w-5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={() => camRef.current?.click()}
-              disabled={uploading || recording || !!editing || !!staged}
-              aria-label="Take photo or video"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition hover:bg-secondary disabled:opacity-40"
-            >
-              <Camera className="h-5 w-5" />
-            </Button>
-
-            {/* Quick WhatsApp-style formatting tools */}
-            <div className="hidden sm:flex items-center gap-0.5 border-r border-border pr-1">
-              <button
-                type="button"
-                onClick={() => applyFormat("*")}
-                title="Bold (*text*)"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
-              >
-                <Bold className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat("_")}
-                title="Italic (_text_)"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
-              >
-                <Italic className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat("~")}
-                title="Strikethrough (~text~)"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
-              >
-                <Strikethrough className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat("`")}
-                title="Monospace (`code`)"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
-              >
-                <CodeIcon className="h-4 w-4" />
-              </button>
-            </div>
-
+          ) : (
             <textarea
               ref={taRef}
               rows={1}
               value={text}
-              maxLength={MESSAGE_MAX}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape" && (editing || replyTo)) {
-                  if (editing) setText("");
-                  setEditing(null);
-                  setReplyTo(null);
-                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   if (editing) void onSaveEdit();
                   else void send();
                 }
               }}
-              placeholder="Write a message… (e.g. *bold*, _italic_, ~strike~)"
-              aria-label="Message"
-              className="max-h-40 min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
-            />
-
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={() => (recording ? stopRecording() : void startRecording())}
-              disabled={uploading || !!editing || !!staged}
-              aria-label={recording ? "Stop recording" : "Record voice"}
+              placeholder={editing ? "Edit message..." : "Type a secure message..."}
+              maxLength={MESSAGE_MAX}
               className={cn(
-                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition disabled:opacity-40",
-                recording ? "bg-destructive text-destructive-foreground" : "text-primary hover:bg-secondary"
+                "max-h-32 min-h-[40px] flex-1 resize-none rounded-2xl border px-3.5 py-2 text-sm leading-tight focus:outline-none focus:ring-1 focus:ring-primary",
+                darkWall
+                  ? "border-white/15 bg-white/10 text-white placeholder:text-white/50"
+                  : "border-border/80 bg-background text-foreground"
               )}
-            >
-              {recording ? <Square className="h-4 w-4" /> : <Mic className="h-5 w-5" />}
-            </Button>
+            />
+          )}
+
+          {!recording && !text.trim() && !staged && !editing && (
             <Button
+              type="button"
               variant="ghost"
               size="icon"
-              onClick={() => (editing ? void onSaveEdit() : void send())}
-              disabled={!me || (!text.trim() && !staged) || sending || uploading || recording}
-              aria-label={editing ? "Save" : "Send"}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
+              className="h-10 w-10 shrink-0 rounded-full"
+              onClick={() => void startRecording()}
+              disabled={sending || uploading}
+              aria-label="Record voice note"
             >
-              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <SendHorizontal className="h-5 w-5" />}
+              <Mic className="h-5 w-5" />
             </Button>
-          </div>
+          )}
+
+          {(text.trim() || staged || editing) && !recording && (
+            <Button
+              type="button"
+              size="icon"
+              className="h-10 w-10 shrink-0 rounded-full"
+              disabled={sending || uploading}
+              onClick={() => {
+                if (editing) void onSaveEdit();
+                else void send();
+              }}
+              aria-label={editing ? "Save edit" : "Send message"}
+            >
+              {uploading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <SendHorizontal className="h-5 w-5" />
+              )}
+            </Button>
+          )}
         </div>
       </footer>
     </div>
