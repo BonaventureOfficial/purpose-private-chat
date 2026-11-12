@@ -60,9 +60,9 @@ export const Route = createFileRoute("/_authenticated/chat/$userId")({
   head: () => ({
     meta: [
       { title: "Chat — Purpose" },
-      { name: "description", content: "A private Purpose conversation." },
+      { name: "description", content: "End-to-end encrypted private messaging." },
       { property: "og:title", content: "Chat — Purpose" },
-      { property: "og:description", content: "A private Purpose conversation." },
+      { property: "og:description", content: "End-to-end encrypted private messaging." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -77,62 +77,76 @@ function time(iso: string) {
 function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) {
   if (!text) return null;
   const pattern = /(```[\s\S]+?```|`[^`\n]+`|\*[^\s*](?:[^*]*?[^\s*])?\*|_[^\s_](?:[^_]*?[^\s_])?_|~[^\s~](?:[^~]*?[^\s~])?~)/g;
-  const parts = text.split(pattern);
+  const parts: (string | JSX.Element)[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    const key = `${match.index}-${token.length}`;
+
+    if (token.startsWith("```") && token.endsWith("```") && token.length >= 6) {
+      const code = token.slice(3, -3).replace(/^\n/, "");
+      parts.push(
+        <pre
+          key={key}
+          className={cn(
+            "my-1 overflow-x-auto rounded-lg p-2 font-mono text-xs",
+            isMine ? "bg-black/25 text-white" : "bg-black/10 dark:bg-white/10"
+          )}
+        >
+          <code>{code}</code>
+        </pre>
+      );
+    } else if (token.startsWith("`") && token.endsWith("`") && token.length >= 2) {
+      parts.push(
+        <code
+          key={key}
+          className={cn(
+            "rounded px-1 py-0.5 font-mono text-[13px]",
+            isMine ? "bg-black/25 text-white" : "bg-black/10 dark:bg-white/10"
+          )}
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith("*") && token.endsWith("*") && token.length >= 2) {
+      parts.push(
+        <strong key={key} className="font-bold">
+          {token.slice(1, -1)}
+        </strong>
+      );
+    } else if (token.startsWith("_") && token.endsWith("_") && token.length >= 2) {
+      parts.push(
+        <em key={key} className="italic">
+          {token.slice(1, -1)}
+        </em>
+      );
+    } else if (token.startsWith("~") && token.endsWith("~") && token.length >= 2) {
+      parts.push(
+        <s key={key} className="line-through opacity-80">
+          {token.slice(1, -1)}
+        </s>
+      );
+    } else {
+      parts.push(token);
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
 
   return (
-    <>
-      {parts.map((part, index) => {
-        if (!part) return null;
-        if (part.startsWith("```") && part.endsWith("```") && part.length >= 6) {
-          return (
-            <pre
-              key={index}
-              className={cn(
-                "my-1 overflow-x-auto rounded-lg p-2 font-mono text-xs",
-                isMine ? "bg-black/25 text-white" : "bg-secondary text-foreground"
-              )}
-            >
-              {part.slice(3, -3).replace(/^\n+|\n+$/g, "")}
-            </pre>
-          );
-        }
-        if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
-          return (
-            <code
-              key={index}
-              className={cn(
-                "rounded px-1.5 py-0.5 font-mono text-[13px]",
-                isMine ? "bg-black/25 text-white" : "bg-secondary text-foreground"
-              )}
-            >
-              {part.slice(1, -1)}
-            </code>
-          );
-        }
-        if (part.startsWith("*") && part.endsWith("*") && part.length >= 3) {
-          return (
-            <strong key={index} className="font-bold tracking-wide">
-              {part.slice(1, -1)}
-            </strong>
-          );
-        }
-        if (part.startsWith("_") && part.endsWith("_") && part.length >= 3) {
-          return (
-            <em key={index} className="italic">
-              {part.slice(1, -1)}
-            </em>
-          );
-        }
-        if (part.startsWith("~") && part.endsWith("~") && part.length >= 3) {
-          return (
-            <del key={index} className="line-through opacity-85">
-              {part.slice(1, -1)}
-            </del>
-          );
-        }
-        return <span key={index}>{part}</span>;
-      })}
-    </>
+    <span>
+      {parts.map((p, idx) => (
+        <Fragment key={idx}>{p}</Fragment>
+      ))}
+    </span>
   );
 }
 
@@ -274,8 +288,8 @@ function DecryptedAttachment({
 
 function ChatPage() {
   const { userId } = Route.useParams();
-  const { theme } = useBackground();
-  const darkWall = isDarkBackground(theme);
+  const [bg] = useBackground();
+  const darkWall = isDarkBackground(bg);
   const [partner, setPartner] = useState<PublicProfile | null>(null);
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [pending, setPending] = useState<Message[]>([]);
@@ -498,8 +512,9 @@ function ChatPage() {
     <div
       className={cn(
         "relative flex h-[100dvh] flex-col overflow-hidden text-foreground",
-        darkWall ? "bg-black/85" : "bg-background/80"
+        darkWall && "dark text-foreground"
       )}
+      style={{ backgroundColor: bg }}
     >
       <div
         aria-hidden="true"
@@ -518,7 +533,7 @@ function ChatPage() {
       >
         <div className="flex items-center gap-3">
           <Link
-            to="/"
+            to="/home"
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-full transition",
               darkWall ? "hover:bg-white/10" : "hover:bg-muted"
@@ -586,21 +601,21 @@ function ChatPage() {
                     )}
                   >
                     {m.reply_to_id && (() => {
-                      const q = display.find((x) => x.id === m.reply_to_id);
+                      const parent = display.find((x) => x.id === m.reply_to_id);
                       return (
-                        <span
+                        <div
                           className={cn(
-                            "mb-1 block rounded-lg border-l-4 px-2 py-1 text-xs",
+                            "mb-1.5 rounded-lg border-l-2 px-2.5 py-1 text-xs opacity-90",
                             mine
-                              ? "border-primary-foreground/60 bg-primary-foreground/10 text-primary-foreground"
-                              : "border-primary bg-secondary text-foreground"
+                              ? "border-primary-foreground/60 bg-black/15 text-primary-foreground"
+                              : "border-primary bg-secondary text-secondary-foreground"
                           )}
                         >
-                          <span className="block font-semibold">{q ? (q.sender_id === me ? "You" : name) : ""}</span>
-                          <span className="line-clamp-2 opacity-85">
-                            {!q || q.deleted_at ? "Message deleted" : <FormattedMessage text={q.body} isMine={mine} />}
-                          </span>
-                        </span>
+                          <p className="font-semibold text-[11px]">
+                            {parent?.sender_id === me ? "You" : partner?.username ?? "Partner"}
+                          </p>
+                          <p className="truncate opacity-80">{parent ? parent.body || "Attachment" : "Replying to message"}</p>
+                        </div>
                       );
                     })()}
 
@@ -616,7 +631,7 @@ function ChatPage() {
                     )}
 
                     {m.deleted_at ? (
-                      <em className="opacity-70">Message deleted</em>
+                      <span className="italic opacity-70">Message deleted</span>
                     ) : (
                       <FormattedMessage text={m.body} isMine={mine} />
                     )}
@@ -633,22 +648,27 @@ function ChatPage() {
                     </span>
                   </div>
 
-                  {!isPending && !m.deleted_at && (
+                  {!m.deleted_at && (
                     <DropdownMenu>
-                      <DropdownMenuTrigger
-                        aria-label="Message options"
-                        className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-60 transition hover:bg-background hover:opacity-100 focus:opacity-100 group-hover:opacity-100"
-                      >
-                        <MoreVertical className="h-4 w-4" />
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            "opacity-0 transition-opacity group-hover:opacity-100 p-1 rounded-full",
+                            darkWall ? "text-white/60 hover:bg-white/10" : "text-muted-foreground hover:bg-muted"
+                          )}
+                          aria-label="Message options"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align={mine ? "end" : "start"} className="w-40">
-                        {mine && !m.attachment_url && (
+                      <DropdownMenuContent align={mine ? "end" : "start"} className="w-36">
+                        {mine && (
                           <DropdownMenuItem
                             onSelect={() => {
-                              setReplyTo(null);
                               setEditing(m);
                               setText(m.body);
-                              setTimeout(() => taRef.current?.focus(), 0);
+                              taRef.current?.focus();
                             }}
                           >
                             <Pencil className="h-4 w-4" /> Edit
@@ -656,9 +676,8 @@ function ChatPage() {
                         )}
                         <DropdownMenuItem
                           onSelect={() => {
-                            setEditing(null);
                             setReplyTo(m);
-                            setTimeout(() => taRef.current?.focus(), 0);
+                            taRef.current?.focus();
                           }}
                         >
                           <CornerUpLeft className="h-4 w-4" /> Reply
