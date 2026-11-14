@@ -101,6 +101,7 @@ export type Database = {
         Row: {
           avatar_url: string | null
           created_at: string
+          only_admins_can_send: boolean
           created_by: string
           id: string
           name: string
@@ -109,6 +110,7 @@ export type Database = {
         Insert: {
           avatar_url?: string | null
           created_at?: string
+          only_admins_can_send?: boolean
           created_by: string
           id?: string
           name: string
@@ -117,6 +119,7 @@ export type Database = {
         Update: {
           avatar_url?: string | null
           created_at?: string
+          only_admins_can_send?: boolean
           created_by?: string
           id?: string
           name?: string
@@ -134,18 +137,21 @@ export type Database = {
       }
       group_members: {
         Row: {
+          can_send: boolean
           group_id: string
           joined_at: string
           role: string
           user_id: string
         }
         Insert: {
+          can_send?: boolean
           group_id: string
           joined_at?: string
           role?: string
           user_id: string
         }
         Update: {
+          can_send?: boolean
           group_id?: string
           joined_at?: string
           role?: string
@@ -172,6 +178,7 @@ export type Database = {
         Row: {
           avatar_url: string | null
           created_at: string
+          only_admins_can_send: boolean
           id: string
           updated_at: string
           username: string
@@ -179,6 +186,7 @@ export type Database = {
         Insert: {
           avatar_url?: string | null
           created_at?: string
+          only_admins_can_send?: boolean
           id: string
           updated_at?: string
           username: string
@@ -186,6 +194,7 @@ export type Database = {
         Update: {
           avatar_url?: string | null
           created_at?: string
+          only_admins_can_send?: boolean
           id?: string
           updated_at?: string
           username?: string
