@@ -222,8 +222,9 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
       };
     }
 
+    const canonicalId = (payload as any).message_id || item.target_id || item.id;
     const message: LocalMessage = {
-      id: item.id,
+      id: canonicalId,
       sender_id: item.sender_id,
       recipient_id: item.recipient_id,
       group_id: item.group_id ?? null,
@@ -245,7 +246,9 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
     await saveLocalMessage(me, message);
   } else if (item.target_id) {
     const original = (await getLocalMessages(me)).find((m) => m.id === item.target_id);
-    if (original && original.sender_id === item.sender_id && original.recipient_id === me) {
+    const isGroupDelete = original && (original.group_id || item.group_id);
+    const isDirectSender = original && original.sender_id === item.sender_id && original.recipient_id === me;
+    if (original && (isDirectSender || isGroupDelete)) {
       if (item.relay_kind === "edit") {
         let editedText = item.body;
         if (isE2EE(item.body)) {
@@ -498,8 +501,29 @@ export async function deleteMessage(message: Message, me: string) {
 }
 
 // ====================================================================
-// GROUPS FUNCTIONS (E2EE PAIRWISE BROADCAST & EPHEMERAL RELAY)
+// GROUPS FUNCTIONS (E2EE PAIRWISE BROADCAST & OWNER SUPERPOWERS)
 // ====================================================================
+
+export interface GroupMemberWithProfile {
+  user_id: string;
+  role: "admin" | "member";
+  can_send: boolean;
+  joined_at: string;
+  profile: PublicProfile;
+}
+
+export interface GroupDetails {
+  id: string;
+  name: string;
+  avatar_url: string | null;
+  created_by: string;
+  created_at: string;
+  only_admins_can_send: boolean;
+  members: GroupMemberWithProfile[];
+  myRole: "admin" | "member";
+  isOwner: boolean;
+  canSend: boolean;
+}
 
 export async function createGroup(
   name: string,
@@ -521,148 +545,91 @@ export async function createGroup(
       name: groupName,
       created_by: me,
       avatar_url: avatarUrl ?? null,
-    })
-    .select("id, name, avatar_url, created_by, created_at, updated_at")
+      only_admins_can_send: false,
+    } as any)
+    .select("id")
     .single();
 
   if (groupError || !groupData) {
-    throw new Error(groupError?.message ?? "Failed to create group.");
+    throw new Error(groupError?.message || "Failed to create group.");
   }
 
-  // 2. Add creator as admin + other members
-  const memberRows = [
-    { group_id: groupData.id, user_id: me, role: "admin" },
-    ...memberUserIds
-      .filter((id) => id !== me)
-      .map((userId) => ({ group_id: groupData.id, user_id: userId, role: "member" })),
-  ];
+  const groupId = groupData.id;
 
-  const { error: membersError } = await supabase.from("group_members").insert(memberRows);
+  // 2. Add creator as admin
+  const allMembers = Array.from(new Set([me, ...memberUserIds]));
+  const memberRows = allMembers.map((userId) => ({
+    group_id: groupId,
+    user_id: userId,
+    role: userId === me ? "admin" : "member",
+    can_send: true,
+  }));
+
+  const { error: membersError } = await supabase
+    .from("group_members")
+    .insert(memberRows as any);
+
   if (membersError) {
     throw new Error(membersError.message);
   }
 
-  // 3. Save to local storage
+  // 3. Save group metadata in local IndexedDB
   await saveLocalGroup(me, {
-    id: groupData.id,
-    name: groupData.name,
-    avatar_url: groupData.avatar_url,
-    created_by: groupData.created_by,
-    created_at: groupData.created_at,
-    updated_at: groupData.updated_at,
-    role: "admin",
+    id: groupId,
+    name: groupName,
+    avatar_url: avatarUrl ?? null,
+    created_by: me,
+    created_at: new Date().toISOString(),
+    my_role: "admin",
   });
 
-  return groupData.id;
+  return groupId;
 }
 
-export async function listMyGroups(me: string): Promise<GroupSummary[]> {
-  // Query Supabase for current group memberships
-  const { data, error } = await supabase
-    .from("group_members")
-    .select("group_id, role, groups(id, name, avatar_url, created_by, created_at, updated_at)")
-    .eq("user_id", me);
-
-  if (error) {
-    // Fallback to local storage if offline
-    const locals = await getLocalGroups(me);
-    return Promise.all(
-      locals.map(async (g) => {
-        const messages = await getLocalMessages(me, g.id);
-        const last = messages.length ? messages[messages.length - 1] : null;
-        const unread = messages.filter((m) => m.recipient_id === me && !m.read_at && !m.deleted_at).length;
-        return {
-          id: g.id,
-          name: g.name,
-          avatar_url: g.avatar_url,
-          created_by: g.created_by,
-          role: g.role,
-          last,
-          unread,
-        };
-      })
-    );
-  }
-
-  const summaries: GroupSummary[] = [];
-  for (const item of (data ?? []) as any[]) {
-    if (!item.groups) continue;
-    const g = item.groups;
-    const localGroup: LocalGroup = {
-      id: g.id,
-      name: g.name,
-      avatar_url: g.avatar_url,
-      created_by: g.created_by,
-      created_at: g.created_at,
-      updated_at: g.updated_at,
-      role: item.role as "admin" | "member",
-    };
-    await saveLocalGroup(me, localGroup);
-
-    const messages = await getLocalMessages(me, g.id);
-    const last = messages.length ? messages[messages.length - 1] : null;
-    const unread = messages.filter((m) => m.recipient_id === me && !m.read_at && !m.deleted_at).length;
-
-    summaries.push({
-      id: g.id,
-      name: g.name,
-      avatar_url: g.avatar_url,
-      created_by: g.created_by,
-      role: item.role as "admin" | "member",
-      last,
-      unread,
-    });
-  }
-
-  summaries.sort((a, b) => {
-    const timeA = a.last?.created_at ?? "";
-    const timeB = b.last?.created_at ?? "";
-    return timeB.localeCompare(timeA);
-  });
-
-  return summaries;
-}
-
-export async function getGroupDetails(groupId: string): Promise<GroupDetails | null> {
+export async function getGroupDetails(groupId: string): Promise<GroupDetails> {
   const me = await myId();
-  if (!me) return null;
+  if (!me) throw new Error("You must be signed in.");
 
   const { data: group, error: groupErr } = await supabase
     .from("groups")
-    .select("id, name, avatar_url, created_by, created_at, updated_at")
+    .select("id, name, avatar_url, created_by, created_at, only_admins_can_send")
     .eq("id", groupId)
-    .maybeSingle();
+    .single();
 
-  if (groupErr || !group) return null;
+  if (groupErr || !group) {
+    throw new Error(groupErr?.message || "Group not found.");
+  }
 
   const { data: members, error: membersErr } = await supabase
     .from("group_members")
-    .select("user_id, role, joined_at, profiles(id, username, avatar_url, public_key)")
+    .select("user_id, role, can_send, joined_at, profiles(id, username, avatar_url, public_key)")
     .eq("group_id", groupId);
 
-  if (membersErr) return null;
+  if (membersErr || !members) {
+    throw new Error(membersErr?.message || "Unable to load group members.");
+  }
 
-  const myMember = (members ?? []).find((m: any) => m.user_id === me);
-  const myRole = (myMember?.role as "admin" | "member") ?? "member";
-
-  const formattedMembers: GroupMember[] = (members ?? []).map((m: any) => ({
+  const formattedMembers: GroupMemberWithProfile[] = members.map((m: any) => ({
     user_id: m.user_id,
-    role: m.role as "admin" | "member",
+    role: (m.role as "admin" | "member") || "member",
+    can_send: m.can_send !== false,
     joined_at: m.joined_at,
     profile: {
-      id: m.profiles?.id ?? m.user_id,
-      username: m.profiles?.username ?? "Unknown",
-      avatar_url: m.profiles?.avatar_url ?? null,
-      public_key: m.profiles?.public_key ?? null,
+      id: m.profiles.id,
+      username: m.profiles.username,
+      avatar_url: m.profiles.avatar_url,
+      public_key: m.profiles.public_key,
     },
   }));
 
-  // Update cached contacts
-  for (const m of formattedMembers) {
-    if (m.profile.id !== me) {
-      await saveLocalContact(me, m.profile);
-    }
-  }
+  const myMember = formattedMembers.find((m) => m.user_id === me);
+  const myRole: "admin" | "member" = myMember?.role || "member";
+  const isOwner = group.created_by === me;
+  const isMuted = myMember ? myMember.can_send === false : false;
+  const onlyAdmins = Boolean((group as any).only_admins_can_send);
+
+  // Owner can always send. Otherwise must not be muted, and if onlyAdmins is active, must be admin.
+  const canSend = isOwner || (!isMuted && (!onlyAdmins || myRole === "admin"));
 
   return {
     id: group.id,
@@ -670,11 +637,146 @@ export async function getGroupDetails(groupId: string): Promise<GroupDetails | n
     avatar_url: group.avatar_url,
     created_by: group.created_by,
     created_at: group.created_at,
-    updated_at: group.updated_at,
+    only_admins_can_send: onlyAdmins,
     members: formattedMembers,
     myRole,
+    isOwner,
+    canSend,
   };
 }
+
+// --------------------------------------------------------------------
+// OWNER & ADMIN SUPERPOWERS
+// --------------------------------------------------------------------
+
+/**
+ * Owner only: Promote a member to Admin or demote back to Member
+ */
+export async function setMemberRole(
+  groupId: string,
+  targetUserId: string,
+  newRole: "admin" | "member"
+): Promise<void> {
+  const me = await myId();
+  if (!me) throw new Error("You must be signed in.");
+
+  const { error } = await supabase
+    .from("group_members")
+    .update({ role: newRole } as any)
+    .eq("group_id", groupId)
+    .eq("user_id", targetUserId);
+
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Owner or Admin: Mute a member (ban from sending) or restore sending rights
+ */
+export async function setMemberCanSend(
+  groupId: string,
+  targetUserId: string,
+  canSend: boolean
+): Promise<void> {
+  const me = await myId();
+  if (!me) throw new Error("You must be signed in.");
+
+  const { error } = await supabase
+    .from("group_members")
+    .update({ can_send: canSend } as any)
+    .eq("group_id", groupId)
+    .eq("user_id", targetUserId);
+
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Owner only: Toggle restriction to allow only admins to send messages
+ */
+export async function setGroupOnlyAdminsCanSend(
+  groupId: string,
+  onlyAdmins: boolean
+): Promise<void> {
+  const me = await myId();
+  if (!me) throw new Error("You must be signed in.");
+
+  const { error } = await supabase
+    .from("groups")
+    .update({ only_admins_can_send: onlyAdmins } as any)
+    .eq("id", groupId);
+
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Owner or Admin: Kick a member from the group
+ */
+export async function kickGroupMember(
+  groupId: string,
+  targetUserId: string
+): Promise<void> {
+  const me = await myId();
+  if (!me) throw new Error("You must be signed in.");
+
+  const { error } = await supabase
+    .from("group_members")
+    .delete()
+    .eq("group_id", groupId)
+    .eq("user_id", targetUserId);
+
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Delete a group message: permitted for Sender, Group Admins, and Group Owner.
+ * Propagates delete tombstone to all members via ephemeral relay.
+ */
+export async function deleteGroupMessage(
+  groupId: string,
+  message: Message
+): Promise<void> {
+  const me = await myId();
+  if (!me) throw new Error("You must be signed in.");
+
+  const details = await getGroupDetails(groupId);
+  const isMine = message.sender_id === me;
+  const isAdminOrOwner = details.isOwner || details.myRole === "admin";
+
+  if (!isMine && !isAdminOrOwner) {
+    throw new Error("Only the message sender or group administrators can delete this message.");
+  }
+
+  // 1. Mark deleted locally
+  await updateLocalMessageStatus(me, message.id, {
+    body: "",
+    deleted_at: new Date().toISOString(),
+    attachment_url: null,
+    attachment_type: null,
+    attachment_name: null,
+    attachment_key: null,
+    attachment_iv: null,
+  });
+
+  // 2. Broadcast delete control item to all other group members
+  const otherMembers = details.members.filter((m) => m.user_id !== me);
+  for (const m of otherMembers) {
+    await saveRelayOutbox({
+      id: crypto.randomUUID(),
+      sender_id: me,
+      recipient_id: m.user_id,
+      group_id: groupId,
+      body: "",
+      relay_kind: "delete",
+      target_id: message.id,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  void syncRelay(me).catch(() => {});
+}
+
+// --------------------------------------------------------------------
+// SEND GROUP MESSAGE (E2EE PAIRWISE BROADCAST)
+// --------------------------------------------------------------------
 
 export async function sendGroupMessage(
   groupId: string,
@@ -691,28 +793,13 @@ export async function sendGroupMessage(
 
   await ensureMyE2EEKeys(me);
 
-  // 1. Fetch group members with their public keys
-  const { data: members, error: membersErr } = await supabase
-    .from("group_members")
-    .select("user_id, profiles(id, username, public_key)")
-    .eq("group_id", groupId);
-
-  if (membersErr || !members?.length) {
-    throw new Error("Unable to retrieve group members.");
-  }
-
-  const isMember = members.some((m: any) => m.user_id === me);
-  if (!isMember) {
-    throw new Error("You are not a member of this group.");
-  }
-
-  const otherMembers = members.filter((m: any) => m.user_id !== me);
-
-  // Check if all other members have public keys
-  const missingKeys = otherMembers.filter((m: any) => !m.profiles?.public_key);
-  if (missingKeys.length > 0) {
-    const missingNames = missingKeys.map((m: any) => m.profiles?.username || "A member").join(", ");
-    throw new Error(`Cannot send message: ${missingNames} has not initialized encryption keys yet.`);
+  // 1. Fetch group details & verify permissions
+  const details = await getGroupDetails(groupId);
+  if (!details.canSend) {
+    if (details.only_admins_can_send && details.myRole !== "admin" && !details.isOwner) {
+      throw new Error("Only administrators are permitted to send messages in this group.");
+    }
+    throw new Error("You have been restricted from sending messages in this group.");
   }
 
   const messageId = crypto.randomUUID();
@@ -741,7 +828,11 @@ export async function sendGroupMessage(
 
   await saveLocalMessage(me, localMessage);
 
-  // 3. Pairwise E2EE broadcast: encrypt individually for each member and enqueue
+  // 3. Pairwise E2EE broadcast:
+  // Tolerance check: if a member does NOT have public_key, skip them without blocking the group!
+  const otherMembers = details.members.filter((m) => m.user_id !== me);
+  const readyMembers = otherMembers.filter((m) => Boolean(m.profile.public_key));
+
   const payloadData: EncryptedPayload = {
     text,
     attachment: att
@@ -754,28 +845,34 @@ export async function sendGroupMessage(
         }
       : null,
     reply_to_id: replyTo,
+    message_id: messageId,
+    group_id: groupId,
   };
 
-  for (const m of otherMembers as any[]) {
-    const recipientKey = m.profiles.public_key;
-    const encryptedWire = await encryptE2EE(recipientKey, payloadData);
+  for (const m of readyMembers) {
+    try {
+      const recipientKey = m.profile.public_key!;
+      const encryptedWire = await encryptE2EE(recipientKey, payloadData);
 
-    const item: RelayOutboxItem = {
-      id: crypto.randomUUID(),
-      sender_id: me,
-      recipient_id: m.user_id,
-      group_id: groupId,
-      body: encryptedWire,
-      created_at: createdAt,
-      relay_kind: "message",
-      target_id: null,
-      reply_to_id: null,
-      attachment_url: null,
-      attachment_type: null,
-      attachment_name: null,
-    };
+      const item: RelayOutboxItem = {
+        id: crypto.randomUUID(),
+        sender_id: me,
+        recipient_id: m.user_id,
+        group_id: groupId,
+        body: encryptedWire,
+        created_at: createdAt,
+        relay_kind: "message",
+        target_id: messageId,
+        reply_to_id: null,
+        attachment_url: null,
+        attachment_type: null,
+        attachment_name: null,
+      };
 
-    await saveRelayOutbox(item);
+      await saveRelayOutbox(item);
+    } catch (err) {
+      console.error(`Failed to encrypt for member ${m.profile.username}:`, err);
+    }
   }
 
   await updateLocalMessageStatus(me, messageId, { local_status: "sent" });
