@@ -74,7 +74,6 @@ export type Database = {
         }
         Relationships: [
           {
-            {
             foreignKeyName: "messages_group_id_fkey"
             columns: ["group_id"]
             isOneToOne: false
