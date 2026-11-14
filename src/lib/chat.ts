@@ -525,6 +525,71 @@ export interface GroupDetails {
   canSend: boolean;
 }
 
+export async function listMyGroups(me: string): Promise<GroupSummary[]> {
+  try {
+    const { data: memberRows, error: memberErr } = await supabase
+      .from("group_members")
+      .select("group_id, role")
+      .eq("user_id", me);
+
+    if (!memberErr && memberRows && memberRows.length > 0) {
+      const groupIds = memberRows.map((r: any) => r.group_id);
+      const { data: groupsData, error: groupsErr } = await supabase
+        .from("groups")
+        .select("id, name, avatar_url, created_by, created_at, updated_at")
+        .in("id", groupIds);
+
+      if (!groupsErr && groupsData) {
+        const roleMap = new Map(memberRows.map((r: any) => [r.group_id, (r.role as "admin" | "member") || "member"]));
+        for (const g of groupsData as any[]) {
+          await saveLocalGroup(me, {
+            id: g.id,
+            name: g.name,
+            avatar_url: g.avatar_url,
+            created_by: g.created_by,
+            created_at: g.created_at || new Date().toISOString(),
+            updated_at: g.updated_at || new Date().toISOString(),
+            role: roleMap.get(g.id) || "member",
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Failed to sync groups from server:", err);
+  }
+
+  const localGroups = await getLocalGroups(me);
+  if (!localGroups.length) return [];
+
+  const allMessages = await getLocalMessages(me);
+
+  const summaries: GroupSummary[] = localGroups.map((g) => {
+    const groupMsgs = allMessages.filter(
+      (m) => m.group_id === g.id && !isHiddenFor(m, me)
+    );
+    const last = groupMsgs.length > 0 ? groupMsgs[groupMsgs.length - 1] : null;
+    const unread = groupMsgs.filter(
+      (m) => m.sender_id !== me && !m.read_at && !m.deleted_at
+    ).length;
+
+    return {
+      id: g.id,
+      name: g.name,
+      avatar_url: g.avatar_url,
+      created_by: g.created_by,
+      role: g.role,
+      last,
+      unread,
+    };
+  });
+
+  return summaries.sort((a, b) => {
+    const timeA = a.last?.created_at || "1970-01-01";
+    const timeB = b.last?.created_at || "1970-01-01";
+    return timeB.localeCompare(timeA);
+  });
+}
+
 export async function createGroup(
   name: string,
   memberUserIds: string[],
@@ -580,7 +645,8 @@ export async function createGroup(
     avatar_url: avatarUrl ?? null,
     created_by: me,
     created_at: new Date().toISOString(),
-    my_role: "admin",
+    updated_at: new Date().toISOString(),
+    role: "admin",
   });
 
   return groupId;
