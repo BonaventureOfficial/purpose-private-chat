@@ -654,8 +654,8 @@ function ChatPage() {
                         <button
                           type="button"
                           className={cn(
-                            "opacity-0 transition-opacity group-hover:opacity-100 p-1 rounded-full",
-                            darkWall ? "text-white/60 hover:bg-white/10" : "text-muted-foreground hover:bg-muted"
+                            "p-1.5 rounded-full shrink-0 self-center transition-opacity opacity-70 hover:opacity-100 focus:opacity-100",
+                            darkWall ? "text-white/70 hover:bg-white/10" : "text-muted-foreground hover:bg-muted"
                           )}
                           aria-label="Message options"
                         >
@@ -663,6 +663,14 @@ function ChatPage() {
                         </button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align={mine ? "end" : "start"} className="w-36">
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            void navigator.clipboard.writeText(m.body);
+                            toast.success("Copied to clipboard");
+                          }}
+                        >
+                          <Copy className="h-4 w-4" /> Copy
+                        </DropdownMenuItem>
                         {mine && (
                           <DropdownMenuItem
                             onSelect={() => {
@@ -681,14 +689,6 @@ function ChatPage() {
                           }}
                         >
                           <CornerUpLeft className="h-4 w-4" /> Reply
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => {
-                            void navigator.clipboard.writeText(m.body);
-                            toast.success("Copied to clipboard");
-                          }}
-                        >
-                          <Copy className="h-4 w-4" /> Copy
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
