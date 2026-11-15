@@ -24,6 +24,10 @@ import {
   Volume2,
   Crown,
   Settings,
+  Bold,
+  Italic,
+  Strikethrough,
+  Code as CodeIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -45,6 +49,7 @@ import {
   MESSAGE_MAX,
   dateLabel,
   deleteGroupMessage,
+  deleteMessage,
   editMessage,
   getGroupDetails,
   leaveGroup,
@@ -283,6 +288,25 @@ function GroupChatPage() {
   const [group, setGroup] = useState<GroupDetails | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState("");
+  const applyFormat = (wrapper: string) => {
+    const el = textareaRef.current;
+    if (!el) {
+      setText((t) => `${t}${wrapper}${wrapper}`);
+      return;
+    }
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    const selected = text.slice(start, end);
+    const replacement = selected ? `${wrapper}${selected}${wrapper}` : `${wrapper}${wrapper}`;
+    const nextText = text.slice(0, start) + replacement + text.slice(end);
+    setText(nextText);
+    setTimeout(() => {
+      el.focus();
+      const cursor = selected ? start + replacement.length : start + wrapper.length;
+      el.setSelectionRange(cursor, cursor);
+    }, 0);
+  };
+
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [attachment, setAttachment] = useState<Attachment | null>(null);
@@ -389,9 +413,15 @@ function GroupChatPage() {
   };
 
   const handleDeleteMessage = async (msg: Message) => {
+    if (!me) return;
     try {
-      await deleteGroupMessage(groupId, msg);
-      toast.success("Message deleted");
+      if (msg.sender_id === me || isAdminOrOwner) {
+        await deleteGroupMessage(groupId, msg);
+        toast.success("Message deleted");
+      } else {
+        await deleteMessage(msg, me);
+        toast.success("Message deleted for you");
+      }
       void loadData();
     } catch (err: any) {
       toast.error(err?.message || "Failed to delete message");
@@ -561,83 +591,75 @@ function GroupChatPage() {
                   </span>
                 )}
 
-                <div
-                  className={cn(
-                    "group relative max-w-[82%] rounded-2xl px-3.5 py-2 text-sm shadow-sm",
-                    isMine
-                      ? "rounded-tr-none bg-primary text-primary-foreground"
-                      : isDark
-                      ? "rounded-tl-none bg-neutral-800 text-neutral-100"
-                      : "rounded-tl-none bg-white text-foreground"
-                  )}
-                >
-                  {m.reply_to_id && (
+                <div className={cn("flex items-center gap-1.5 max-w-full", isMine ? "flex-row-reverse" : "flex-row")}>
+                  <div
+                    className={cn(
+                      "relative max-w-[82%] rounded-2xl px-3.5 py-2 text-sm shadow-sm md:max-w-[65%]",
+                      isMine
+                        ? "rounded-tr-none bg-primary text-primary-foreground"
+                        : isDark
+                        ? "rounded-tl-none bg-neutral-800 text-neutral-100"
+                        : "rounded-tl-none bg-white text-foreground"
+                    )}
+                  >
+                    {m.reply_to_id && (
+                      <div
+                        className={cn(
+                          "mb-1.5 rounded-lg border-l-2 border-primary/60 px-2 py-1 text-[11px]",
+                          isMine ? "bg-black/15 text-white/90" : "bg-foreground/5 text-muted-foreground"
+                        )}
+                      >
+                        <span>In reply to previous message</span>
+                      </div>
+                    )}
+
+                    {m.attachment_url && m.attachment_type && (
+                      <div className="mb-2">
+                        <DecryptedMedia
+                          url={m.attachment_url}
+                          type={m.attachment_type}
+                          name={m.attachment_name || "Attachment"}
+                          attKey={m.attachment_key}
+                          attIv={m.attachment_iv}
+                          isDark={isDark}
+                        />
+                      </div>
+                    )}
+
+                    {m.deleted_at ? (
+                      <em className="text-xs opacity-70">Message deleted</em>
+                    ) : (
+                      <FormattedMessage text={m.body} isMine={isMine} />
+                    )}
+
                     <div
                       className={cn(
-                        "mb-1.5 rounded-lg border-l-2 border-primary/60 px-2 py-1 text-[11px]",
-                        isMine ? "bg-black/15 text-white/90" : "bg-foreground/5 text-muted-foreground"
+                        "mt-1 flex items-center justify-end gap-1 text-[10px]",
+                        isMine ? "text-primary-foreground/75" : "text-muted-foreground"
                       )}
                     >
-                      <span>In reply to previous message</span>
+                      <span>{time(m.created_at)}</span>
+                      {m.edited_at && <span>(edited)</span>}
+                      {isMine && <Check className="h-3 w-3" />}
                     </div>
-                  )}
-
-                  {m.attachment_url && m.attachment_type && (
-                    <div className="mb-2">
-                      <DecryptedMedia
-                        url={m.attachment_url}
-                        type={m.attachment_type}
-                        name={m.attachment_name || "Attachment"}
-                        attKey={m.attachment_key}
-                        attIv={m.attachment_iv}
-                        isDark={isDark}
-                      />
-                    </div>
-                  )}
-
-                  {m.deleted_at ? (
-                    <em className="text-xs opacity-70">Message deleted</em>
-                  ) : (
-                    <FormattedMessage text={m.body} isMine={isMine} />
-                  )}
-
-                  <div
-                    className={cn(
-                      "mt-1 flex items-center justify-end gap-1 text-[10px]",
-                      isMine ? "text-primary-foreground/75" : "text-muted-foreground"
-                    )}
-                  >
-                    <span>{time(m.created_at)}</span>
-                    {m.edited_at && <span>(edited)</span>}
-                    {isMine && <Check className="h-3 w-3" />}
                   </div>
 
-                  {/* Actions dropdown */}
-                  <div
-                    className={cn(
-                      "absolute top-1 hidden group-hover:flex",
-                      isMine ? "-left-8" : "-right-8"
-                    )}
-                  >
+                  {!m.deleted_at && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-6 w-6 rounded-full bg-background/60 shadow"
+                          className={cn(
+                            "h-7 w-7 rounded-full p-1 opacity-70 hover:opacity-100 focus:opacity-100 transition-opacity shrink-0",
+                            isDark ? "text-white/70 hover:bg-white/10" : "text-muted-foreground hover:bg-muted"
+                          )}
+                          aria-label="Message options"
                         >
-                          <MoreVertical className="h-3 w-3" />
+                          <MoreVertical className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="center" className="rounded-xl text-xs">
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setReplyTo(m);
-                            textareaRef.current?.focus();
-                          }}
-                        >
-                          <CornerUpLeft className="mr-2 h-3.5 w-3.5" /> Reply
-                        </DropdownMenuItem>
+                      <DropdownMenuContent align={isMine ? "end" : "start"} className="w-36 rounded-xl text-xs">
                         <DropdownMenuItem
                           onClick={() => {
                             void navigator.clipboard.writeText(m.body);
@@ -646,7 +668,7 @@ function GroupChatPage() {
                         >
                           <Copy className="mr-2 h-3.5 w-3.5" /> Copy
                         </DropdownMenuItem>
-                        {isMine && !m.deleted_at && (
+                        {isMine && (
                           <DropdownMenuItem
                             onClick={() => {
                               setEditingMessage(m);
@@ -657,18 +679,25 @@ function GroupChatPage() {
                             <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
                           </DropdownMenuItem>
                         )}
-                        {canDeleteThisMessage && !m.deleted_at && (
-                          <DropdownMenuItem
-                            onClick={() => handleDeleteMessage(m)}
-                            className="text-destructive"
-                          >
-                            <Trash2 className="mr-2 h-3.5 w-3.5" />
-                            {isMine ? "Delete" : "Delete (Admin)"}
-                          </DropdownMenuItem>
-                        )}
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setReplyTo(m);
+                            textareaRef.current?.focus();
+                          }}
+                        >
+                          <CornerUpLeft className="mr-2 h-3.5 w-3.5" /> Reply
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={() => void handleDeleteMessage(m)}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-3.5 w-3.5" />
+                          {isMine ? "Delete" : isAdminOrOwner ? "Delete (Admin)" : "Delete"}
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -740,7 +769,42 @@ function GroupChatPage() {
             </span>
           </div>
         ) : (
-          <div className="flex items-end gap-2 max-w-4xl mx-auto">
+          <div className="space-y-1.5 max-w-4xl mx-auto">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => applyFormat("*")}
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+                title="Bold (*text*)"
+              >
+                <Bold className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat("_")}
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+                title="Italic (_text_)"
+              >
+                <Italic className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat("~")}
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+                title="Strikethrough (~text~)"
+              >
+                <Strikethrough className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat("`")}
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+                title="Code (`code`)"
+              >
+                <CodeIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex items-end gap-2">
             <input
               type="file"
               ref={fileInputRef}
@@ -797,6 +861,7 @@ function GroupChatPage() {
                 <SendHorizontal className="h-4 w-4" />
               )}
             </Button>
+          </div>
           </div>
         )}
       </footer>
