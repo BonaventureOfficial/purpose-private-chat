@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { BACKGROUNDS, isDarkBackground } from "@/lib/purpose";
 import { cn } from "@/lib/utils";
+import { getMyProfile } from "@/lib/media";
 
 export function useBackground() {
   const [bg, setBg] = useState<string>(BACKGROUNDS[0]!.value);
@@ -20,6 +21,49 @@ export function useBackground() {
 
 export function AppShell({ header, children, bg }: { header: ReactNode; children: ReactNode; bg: string }) {
   const isDark = isDarkBackground(bg);
+  const [myAvatar, setMyAvatar] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return localStorage.getItem("purpose-my-avatar");
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    let active = true;
+    void getMyProfile()
+      .then((p) => {
+        if (!active) return;
+        if (p?.avatar_url) {
+          setMyAvatar(p.avatar_url);
+          try {
+            localStorage.setItem("purpose-my-avatar", p.avatar_url);
+          } catch {}
+        } else if (p && !p.avatar_url) {
+          setMyAvatar(null);
+          try {
+            localStorage.removeItem("purpose-my-avatar");
+          } catch {}
+        }
+      })
+      .catch(() => {});
+
+    const onAvatarUpdated = () => {
+      try {
+        const stored = localStorage.getItem("purpose-my-avatar");
+        setMyAvatar(stored || null);
+      } catch {}
+    };
+
+    window.addEventListener("purpose-avatar-updated", onAvatarUpdated);
+    return () => {
+      active = false;
+      window.removeEventListener("purpose-avatar-updated", onAvatarUpdated);
+    };
+  }, []);
 
   return (
     <div
@@ -51,7 +95,16 @@ export function AppShell({ header, children, bg }: { header: ReactNode; children
             className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground"
             activeProps={{ className: "!text-primary font-semibold" }}
           >
-            <User className="h-5 w-5" /> Profile
+            {myAvatar ? (
+              <img
+                src={myAvatar}
+                alt="Profile"
+                className="h-5 w-5 rounded-full object-cover ring-1 ring-border shadow-xs"
+              />
+            ) : (
+              <User className="h-5 w-5" />
+            )}
+            Profile
           </Link>
         </nav>
       </footer>
