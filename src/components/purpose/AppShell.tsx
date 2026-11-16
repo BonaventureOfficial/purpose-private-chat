@@ -70,41 +70,62 @@ export function AppShell({ header, children, bg }: { header: ReactNode; children
       className={cn("flex h-dvh flex-col transition-colors duration-200", isDark && "dark text-foreground")}
       style={{ backgroundColor: bg }}
     >
-      <header className="shrink-0 border-b border-border bg-background/80 backdrop-blur">{header}</header>
+      <header
+        className={cn(
+          "shrink-0 border-b backdrop-blur-xl shadow-xs transition-colors duration-200",
+          isDark
+            ? "border-white/10 bg-black/50 text-white"
+            : "border-border/50 bg-background/75 text-foreground"
+        )}
+      >
+        {header}
+      </header>
       <main className="flex-1 overflow-y-auto">{children}</main>
-      <footer className="shrink-0 border-t border-border bg-background/90 backdrop-blur">
+      <footer
+        className={cn(
+          "shrink-0 border-t backdrop-blur-xl shadow-lg transition-colors duration-200",
+          isDark
+            ? "border-white/10 bg-gradient-to-t from-black/85 via-black/75 to-black/60 text-white"
+            : "border-border/50 bg-gradient-to-t from-background/95 via-background/85 to-background/70 text-foreground"
+        )}
+      >
         <nav className="mx-auto grid max-w-2xl grid-cols-3 items-center px-4 py-2">
           <Link
             to="/home"
-            className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground"
+            className="group flex flex-col items-center gap-1 text-xs font-medium text-muted-foreground transition-all duration-150 hover:text-foreground active:scale-95"
             activeProps={{ className: "!text-primary font-semibold" }}
           >
-            <Home className="h-5 w-5" /> Home
+            <div className="flex h-8 w-12 items-center justify-center rounded-full transition-colors group-hover:bg-primary/10">
+              <Home className="h-5 w-5" />
+            </div>
+            <span>Home</span>
           </Link>
           <Link
             to="/mypurpose"
-            className="mx-auto -mt-7 flex flex-col items-center gap-1 text-xs font-semibold text-primary"
+            className="mx-auto -mt-6 flex flex-col items-center gap-1 text-xs font-semibold text-primary transition-transform duration-200 active:scale-95 hover:scale-105"
           >
-            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg ring-4 ring-background">
+            <span className="relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-tr from-primary via-primary to-primary/85 text-primary-foreground shadow-lg shadow-primary/30 ring-4 ring-background/80 backdrop-blur-xs">
               <Sparkles className="h-6 w-6" />
             </span>
-            MyPurpose
+            <span>MyPurpose</span>
           </Link>
           <Link
             to="/profile"
-            className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground"
+            className="group flex flex-col items-center gap-1 text-xs font-medium text-muted-foreground transition-all duration-150 hover:text-foreground active:scale-95"
             activeProps={{ className: "!text-primary font-semibold" }}
           >
-            {myAvatar ? (
-              <img
-                src={myAvatar}
-                alt="Profile"
-                className="h-5 w-5 rounded-full object-cover ring-1 ring-border shadow-xs"
-              />
-            ) : (
-              <User className="h-5 w-5" />
-            )}
-            Profile
+            <div className="flex h-8 w-12 items-center justify-center rounded-full transition-colors group-hover:bg-primary/10">
+              {myAvatar ? (
+                <img
+                  src={myAvatar}
+                  alt="Profile"
+                  className="h-6 w-6 rounded-full object-cover ring-1.5 ring-primary/40 shadow-xs"
+                />
+              ) : (
+                <User className="h-5 w-5" />
+              )}
+            </div>
+            <span>Profile</span>
           </Link>
         </nav>
       </footer>
