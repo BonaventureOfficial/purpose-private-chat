@@ -42,12 +42,18 @@ export const Route = createFileRoute("/_authenticated/home")({
 });
 
 function Avatar({ p }: { p: PublicProfile }) {
+  const [error, setError] = useState(false);
   return (
     <div className="relative shrink-0">
-      {p.avatar_url ? (
-        <img src={p.avatar_url} alt={p.username} className="h-14 w-14 rounded-full object-cover" />
+      {p.avatar_url && !error ? (
+        <img
+          src={p.avatar_url}
+          alt={p.username}
+          onError={() => setError(true)}
+          className="h-14 w-14 rounded-full object-cover ring-2 ring-primary/20 shadow-sm"
+        />
       ) : (
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary ring-2 ring-primary/20 shadow-sm">
           {p.username[0]?.toUpperCase()}
         </div>
       )}
@@ -56,12 +62,18 @@ function Avatar({ p }: { p: PublicProfile }) {
 }
 
 function GroupAvatar({ g }: { g: { name: string; avatar_url?: string | null } }) {
+  const [error, setError] = useState(false);
   return (
     <div className="relative shrink-0">
-      {g.avatar_url ? (
-        <img src={g.avatar_url} alt={g.name} className="h-14 w-14 rounded-full object-cover" />
+      {g.avatar_url && !error ? (
+        <img
+          src={g.avatar_url}
+          alt={g.name}
+          onError={() => setError(true)}
+          className="h-14 w-14 rounded-full object-cover ring-2 ring-primary/20 shadow-sm"
+        />
       ) : (
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/15 text-lg font-bold text-primary">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/15 text-lg font-bold text-primary ring-2 ring-primary/20 shadow-sm">
           <Users className="h-6 w-6" />
         </div>
       )}
@@ -251,8 +263,16 @@ function HomePage() {
                           )}
                         >
                           <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary">
-                              {p.username[0]?.toUpperCase()}
+                            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary overflow-hidden shrink-0 ring-1 ring-border">
+                              {p.avatar_url ? (
+                                <img
+                                  src={p.avatar_url}
+                                  alt={p.username}
+                                  className="h-full w-full rounded-full object-cover"
+                                />
+                              ) : (
+                                p.username[0]?.toUpperCase()
+                              )}
                             </div>
                             <span className="text-sm font-medium">{p.username}</span>
                           </div>
