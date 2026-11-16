@@ -494,6 +494,10 @@ function GroupChatPage() {
     return member?.profile.username || "Member";
   };
 
+  const getSenderProfile = (senderId: string) => {
+    return group?.members.find((m) => m.user_id === senderId)?.profile;
+  };
+
   const isOwner = Boolean(group?.isOwner);
   const isAdminOrOwner = isOwner || group?.myRole === "admin";
   const canSend = Boolean(group?.canSend);
@@ -565,6 +569,7 @@ function GroupChatPage() {
         {messages.map((m, idx) => {
           const isMine = m.sender_id === me;
           const senderName = getSenderName(m.sender_id);
+          const senderProfile = getSenderProfile(m.sender_id);
           const prevMsg = messages[idx - 1];
           const showDate = !prevMsg || dateLabel(prevMsg.created_at) !== dateLabel(m.created_at);
           const canDeleteThisMessage = isMine || isAdminOrOwner;
@@ -584,12 +589,26 @@ function GroupChatPage() {
                 </div>
               )}
 
-              <div className={cn("flex flex-col", isMine ? "items-end" : "items-start")}>
+              <div className={cn("flex gap-2 max-w-full", isMine ? "justify-end" : "justify-start")}>
                 {!isMine && (
-                  <span className="ml-3 mb-1 text-[11px] font-semibold text-primary">
-                    {senderName}
-                  </span>
+                  <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0 self-end mb-1 overflow-hidden ring-1 ring-border shadow-xs">
+                    {senderProfile?.avatar_url ? (
+                      <img
+                        src={senderProfile.avatar_url}
+                        alt={senderName}
+                        className="h-full w-full rounded-full object-cover"
+                      />
+                    ) : (
+                      senderName[0]?.toUpperCase()
+                    )}
+                  </div>
                 )}
+                <div className={cn("flex flex-col", isMine ? "items-end" : "items-start")}>
+                  {!isMine && (
+                    <span className="ml-1 mb-1 text-[11px] font-semibold text-primary">
+                      {senderName}
+                    </span>
+                  )}
 
                 <div className={cn("flex items-center gap-1.5 max-w-full", isMine ? "flex-row-reverse" : "flex-row")}>
                   <div
@@ -699,6 +718,7 @@ function GroupChatPage() {
                     </DropdownMenu>
                   )}
                 </div>
+              </div>
               </div>
             </div>
           );
