@@ -527,8 +527,8 @@ function ChatPage() {
 
       <header
         className={cn(
-          "sticky top-0 z-20 flex items-center justify-between border-b px-4 py-3 backdrop-blur-md",
-          darkWall ? "border-white/10 bg-black/40 text-white" : "border-border/60 bg-background/70 text-foreground"
+          "sticky top-0 z-20 flex items-center justify-between border-b px-4 py-3 backdrop-blur-xl shadow-xs transition-colors",
+          darkWall ? "border-white/10 bg-black/55 text-white" : "border-border/50 bg-background/80 text-foreground"
         )}
       >
         <div className="flex items-center gap-3">
@@ -544,9 +544,9 @@ function ChatPage() {
           </Link>
           <div className="flex items-center gap-2.5">
             {partner?.avatar_url ? (
-              <img src={partner.avatar_url} alt={name} className="h-9 w-9 rounded-full object-cover" />
+              <img src={partner.avatar_url} alt={name} className="h-9 w-9 rounded-full object-cover ring-1.5 ring-primary/30 shadow-xs" />
             ) : (
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground text-sm">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground text-sm ring-1.5 ring-primary/30 shadow-xs">
                 {name.slice(0, 1).toUpperCase()}
               </div>
             )}
@@ -580,24 +580,37 @@ function ChatPage() {
             return (
               <Fragment key={m.id}>
                 {showDate && (
-                  <div className="my-2 flex justify-center">
+                  <div className="my-3 flex justify-center">
                     <span
                       className={cn(
-                        "rounded-full px-2.5 py-0.5 font-medium text-[11px] shadow-sm backdrop-blur",
-                        darkWall ? "bg-white/10 text-white/80" : "bg-muted/80 text-muted-foreground"
+                        "rounded-full px-3 py-1 font-medium text-[11px] shadow-xs backdrop-blur-md border uppercase tracking-wider",
+                        darkWall ? "border-white/10 bg-black/40 text-white/90" : "border-border/50 bg-background/80 text-muted-foreground"
                       )}
                     >
                       {dateLabel(m.created_at)}
                     </span>
                   </div>
                 )}
-                <div className={cn("group flex items-start gap-1", mine ? "justify-end" : "justify-start")}>
+                <div className={cn("group flex items-end gap-1.5", mine ? "justify-end" : "justify-start")}>
+                  {!mine && (
+                    <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0 self-end mb-1 overflow-hidden ring-1 ring-border shadow-xs">
+                      {partner?.avatar_url ? (
+                        <img
+                          src={partner.avatar_url}
+                          alt={name}
+                          className="h-full w-full rounded-full object-cover"
+                        />
+                      ) : (
+                        name.slice(0, 1).toUpperCase()
+                      )}
+                    </div>
+                  )}
                   <div
                     className={cn(
-                      "relative max-w-[80%] rounded-2xl px-3.5 py-2 text-sm shadow-sm break-words",
+                      "relative max-w-[80%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-sm break-words transition-all",
                       mine
-                        ? "rounded-tr-none bg-primary text-primary-foreground"
-                        : "rounded-tl-none bg-card text-card-foreground border border-border/40"
+                        ? "rounded-br-xs bg-gradient-to-br from-primary via-primary to-primary/90 text-primary-foreground shadow-md shadow-primary/20 border border-primary-foreground/15"
+                        : "rounded-tl-xs bg-card/90 backdrop-blur-md text-card-foreground border border-border/60 shadow-xs dark:bg-zinc-900/85 dark:border-white/10"
                     )}
                   >
                     {m.reply_to_id && (() => {
@@ -605,10 +618,10 @@ function ChatPage() {
                       return (
                         <div
                           className={cn(
-                            "mb-1.5 rounded-lg border-l-2 px-2.5 py-1 text-xs opacity-90",
+                            "mb-2 rounded-xl border-l-3 px-3 py-1.5 text-xs backdrop-blur-xs",
                             mine
-                              ? "border-primary-foreground/60 bg-black/15 text-primary-foreground"
-                              : "border-primary bg-secondary text-secondary-foreground"
+                              ? "border-primary-foreground/75 bg-black/20 text-primary-foreground"
+                              : "border-primary bg-primary/10 text-card-foreground"
                           )}
                         >
                           <p className="font-semibold text-[11px]">
@@ -639,8 +652,8 @@ function ChatPage() {
                     {m.edited_at && !m.deleted_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
                     <span
                       className={cn(
-                        "ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10px]",
-                        mine ? "text-primary-foreground/70" : "text-muted-foreground"
+                        "ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10.5px] font-medium",
+                        mine ? "text-primary-foreground/75" : "text-muted-foreground"
                       )}
                     >
                       {time(m.created_at)}
@@ -710,8 +723,8 @@ function ChatPage() {
 
       <footer
         className={cn(
-          "sticky bottom-0 z-20 border-t p-3 backdrop-blur-md",
-          darkWall ? "border-white/10 bg-black/40" : "border-border/60 bg-background/80"
+          "sticky bottom-0 z-20 border-t p-3 backdrop-blur-xl shadow-lg transition-colors",
+          darkWall ? "border-white/10 bg-black/60" : "border-border/50 bg-background/80"
         )}
       >
         {replyTo && (
@@ -884,10 +897,10 @@ function ChatPage() {
               placeholder={editing ? "Edit message..." : "Type a secure message..."}
               maxLength={MESSAGE_MAX}
               className={cn(
-                "max-h-32 min-h-[40px] flex-1 resize-none rounded-2xl border px-3.5 py-2 text-sm leading-tight focus:outline-none focus:ring-1 focus:ring-primary",
+                "max-h-32 min-h-[42px] flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm leading-tight transition-all focus:outline-none focus:ring-2 focus:ring-primary/30",
                 darkWall
-                  ? "border-white/15 bg-white/10 text-white placeholder:text-white/50"
-                  : "border-border/80 bg-background text-foreground"
+                  ? "border-white/15 bg-white/10 text-white placeholder:text-white/50 focus:border-white/30"
+                  : "border-border/60 bg-background/90 text-foreground placeholder:text-muted-foreground focus:border-primary/50 shadow-inner"
               )}
             />
           )}
@@ -910,7 +923,7 @@ function ChatPage() {
             <Button
               type="button"
               size="icon"
-              className="h-10 w-10 shrink-0 rounded-full"
+              className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-tr from-primary to-primary/85 text-primary-foreground shadow-md shadow-primary/25 hover:shadow-primary/40 active:scale-95 transition-all"
               disabled={sending || uploading}
               onClick={() => {
                 if (editing) void onSaveEdit();
