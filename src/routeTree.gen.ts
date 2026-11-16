@@ -16,6 +16,7 @@ import { Route as AuthenticatedHomeRouteImport } from './routes/_authenticated/h
 import { Route as AuthenticatedMypurposeRouteImport } from './routes/_authenticated/mypurpose'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
 import { Route as AuthenticatedChatUserIdRouteImport } from './routes/_authenticated/chat.$userId'
+import { Route as AuthenticatedGroupGroupIdRouteImport } from './routes/_authenticated/group.$groupId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -51,6 +52,12 @@ const AuthenticatedChatUserIdRoute = AuthenticatedChatUserIdRouteImport.update({
   path: '/chat/$userId',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedGroupGroupIdRoute =
+  AuthenticatedGroupGroupIdRouteImport.update({
+    id: '/group/$groupId',
+    path: '/group/$groupId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -59,6 +66,7 @@ export interface FileRoutesByFullPath {
   '/mypurpose': typeof AuthenticatedMypurposeRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/chat/$userId': typeof AuthenticatedChatUserIdRoute
+  '/group/$groupId': typeof AuthenticatedGroupGroupIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -67,6 +75,7 @@ export interface FileRoutesByTo {
   '/mypurpose': typeof AuthenticatedMypurposeRoute
   '/profile': typeof AuthenticatedProfileRoute
   '/chat/$userId': typeof AuthenticatedChatUserIdRoute
+  '/group/$groupId': typeof AuthenticatedGroupGroupIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -77,13 +86,27 @@ export interface FileRoutesById {
   '/_authenticated/mypurpose': typeof AuthenticatedMypurposeRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/chat/$userId': typeof AuthenticatedChatUserIdRoute
+  '/_authenticated/group/$groupId': typeof AuthenticatedGroupGroupIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/signin' | '/home' | '/mypurpose' | '/profile' | '/chat/$userId'
+    | '/'
+    | '/signin'
+    | '/home'
+    | '/mypurpose'
+    | '/profile'
+    | '/chat/$userId'
+    | '/group/$groupId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/signin' | '/home' | '/mypurpose' | '/profile' | '/chat/$userId'
+  to:
+    | '/'
+    | '/signin'
+    | '/home'
+    | '/mypurpose'
+    | '/profile'
+    | '/chat/$userId'
+    | '/group/$groupId'
   id:
     | '__root__'
     | '/'
@@ -93,6 +116,7 @@ export interface FileRouteTypes {
     | '/_authenticated/mypurpose'
     | '/_authenticated/profile'
     | '/_authenticated/chat/$userId'
+    | '/_authenticated/group/$groupId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -152,6 +176,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedChatUserIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/group/$groupId': {
+      id: '/_authenticated/group/$groupId'
+      path: '/group/$groupId'
+      fullPath: '/group/$groupId'
+      preLoaderRoute: typeof AuthenticatedGroupGroupIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
@@ -160,6 +191,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedMypurposeRoute: typeof AuthenticatedMypurposeRoute
   AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
   AuthenticatedChatUserIdRoute: typeof AuthenticatedChatUserIdRoute
+  AuthenticatedGroupGroupIdRoute: typeof AuthenticatedGroupGroupIdRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -167,6 +199,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedMypurposeRoute: AuthenticatedMypurposeRoute,
   AuthenticatedProfileRoute: AuthenticatedProfileRoute,
   AuthenticatedChatUserIdRoute: AuthenticatedChatUserIdRoute,
+  AuthenticatedGroupGroupIdRoute: AuthenticatedGroupGroupIdRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
