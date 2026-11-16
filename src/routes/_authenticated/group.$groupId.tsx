@@ -507,8 +507,8 @@ function GroupChatPage() {
       {/* Group Header */}
       <header
         className={cn(
-          "sticky top-0 z-10 flex items-center justify-between border-b px-4 py-2.5 backdrop-blur-md",
-          isDark ? "border-white/10 bg-black/20 text-white" : "border-black/5 bg-white/40 text-foreground"
+          "sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 backdrop-blur-xl shadow-xs transition-colors",
+          isDark ? "border-white/10 bg-black/55 text-white" : "border-border/50 bg-background/80 text-foreground"
         )}
       >
         <div className="flex items-center gap-3">
@@ -580,8 +580,8 @@ function GroupChatPage() {
                 <div className="flex justify-center my-3">
                   <span
                     className={cn(
-                      "rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-wide",
-                      isDark ? "bg-white/10 text-white/80" : "bg-black/5 text-muted-foreground"
+                      "rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-wider backdrop-blur-md border shadow-xs",
+                      isDark ? "border-white/10 bg-black/40 text-white/90" : "border-border/50 bg-background/80 text-muted-foreground"
                     )}
                   >
                     {dateLabel(m.created_at)}
@@ -613,22 +613,22 @@ function GroupChatPage() {
                 <div className={cn("flex items-center gap-1.5 max-w-full", isMine ? "flex-row-reverse" : "flex-row")}>
                   <div
                     className={cn(
-                      "relative max-w-[82%] rounded-2xl px-3.5 py-2 text-sm shadow-sm md:max-w-[65%]",
+                      "relative max-w-[82%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-sm md:max-w-[65%] break-words transition-all",
                       isMine
-                        ? "rounded-tr-none bg-primary text-primary-foreground"
-                        : isDark
-                        ? "rounded-tl-none bg-neutral-800 text-neutral-100"
-                        : "rounded-tl-none bg-white text-foreground"
+                        ? "rounded-br-xs bg-gradient-to-br from-primary via-primary to-primary/90 text-primary-foreground shadow-md shadow-primary/20 border border-primary-foreground/15"
+                        : "rounded-tl-xs bg-card/90 backdrop-blur-md text-card-foreground border border-border/60 shadow-xs dark:bg-zinc-900/85 dark:border-white/10"
                     )}
                   >
                     {m.reply_to_id && (
                       <div
                         className={cn(
-                          "mb-1.5 rounded-lg border-l-2 border-primary/60 px-2 py-1 text-[11px]",
-                          isMine ? "bg-black/15 text-white/90" : "bg-foreground/5 text-muted-foreground"
+                          "mb-2 rounded-xl border-l-3 px-3 py-1.5 text-xs backdrop-blur-xs",
+                          isMine
+                            ? "border-primary-foreground/75 bg-black/20 text-primary-foreground"
+                            : "border-primary bg-primary/10 text-card-foreground"
                         )}
                       >
-                        <span>In reply to previous message</span>
+                        <span className="font-semibold text-[11px]">In reply to previous message</span>
                       </div>
                     )}
 
@@ -775,8 +775,8 @@ function GroupChatPage() {
       {/* Input Footer or Restricted Banner */}
       <footer
         className={cn(
-          "sticky bottom-0 border-t p-3 backdrop-blur-md",
-          isDark ? "border-white/10 bg-black/30" : "border-black/5 bg-white/60"
+          "sticky bottom-0 z-20 border-t p-3 backdrop-blur-xl shadow-lg transition-colors",
+          isDark ? "border-white/10 bg-black/60" : "border-border/50 bg-background/80"
         )}
       >
         {!canSend ? (
@@ -862,18 +862,17 @@ function GroupChatPage() {
               rows={1}
               maxLength={MESSAGE_MAX}
               className={cn(
-                "flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm outline-none transition-all",
-                "focus:ring-2 focus:ring-primary/40",
+                "flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/30",
                 isDark
-                  ? "bg-neutral-800/80 border-white/10 text-white placeholder:text-neutral-400"
-                  : "bg-background border-input text-foreground placeholder:text-muted-foreground"
+                  ? "bg-white/10 border-white/15 text-white placeholder:text-white/50 focus:border-white/30"
+                  : "bg-background/90 border-border/60 text-foreground placeholder:text-muted-foreground focus:border-primary/50 shadow-inner"
               )}
             />
 
             <Button
               onClick={handleSend}
               disabled={sending || (!text.trim() && !attachment)}
-              className="h-10 w-10 shrink-0 rounded-full p-0 shadow-sm"
+              className="h-10 w-10 shrink-0 rounded-full p-0 bg-gradient-to-tr from-primary to-primary/85 text-primary-foreground shadow-md shadow-primary/25 hover:shadow-primary/40 active:scale-95 transition-all"
             >
               {sending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
