@@ -50,10 +50,10 @@ function Avatar({ p }: { p: PublicProfile }) {
           src={p.avatar_url}
           alt={p.username}
           onError={() => setError(true)}
-          className="h-14 w-14 rounded-full object-cover ring-2 ring-primary/20 shadow-sm"
+          className="h-13 w-13 rounded-full object-cover ring-2 ring-primary/25 shadow-xs"
         />
       ) : (
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-xl font-semibold text-primary ring-2 ring-primary/20 shadow-sm">
+        <div className="flex h-13 w-13 items-center justify-center rounded-full bg-primary/10 text-lg font-bold text-primary ring-2 ring-primary/25 shadow-xs">
           {p.username[0]?.toUpperCase()}
         </div>
       )}
@@ -70,10 +70,10 @@ function GroupAvatar({ g }: { g: { name: string; avatar_url?: string | null } })
           src={g.avatar_url}
           alt={g.name}
           onError={() => setError(true)}
-          className="h-14 w-14 rounded-full object-cover ring-2 ring-primary/20 shadow-sm"
+          className="h-13 w-13 rounded-full object-cover ring-2 ring-primary/25 shadow-xs"
         />
       ) : (
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/15 text-lg font-bold text-primary ring-2 ring-primary/20 shadow-sm">
+        <div className="flex h-13 w-13 items-center justify-center rounded-full bg-primary/15 text-lg font-bold text-primary ring-2 ring-primary/25 shadow-xs">
           <Users className="h-6 w-6" />
         </div>
       )}
@@ -175,12 +175,10 @@ function HomePage() {
       setCreateOpen(false);
       setGroupName("");
       setSelectedMembers([]);
-      // Refresh groups list
       if (me) {
         const myGroups = await listMyGroups(me);
         setGroups(myGroups);
       }
-      // Navigate to the newly created group
       await navigate({ to: `/group/${newGroupId}` as any });
     } catch (err: any) {
       toast.error(err?.message || "Failed to create group");
@@ -208,9 +206,9 @@ function HomePage() {
   const header = (
     <div className="mx-auto max-w-2xl px-4 pb-3 pt-3">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Logo className="h-9 w-9" />
-          <span className="text-lg font-bold text-foreground">Purpose</span>
+        <div className="flex items-center gap-2.5">
+          <Logo className="h-9 w-9 drop-shadow-xs" />
+          <span className="text-lg font-bold tracking-tight text-foreground">Purpose</span>
         </div>
         <div className="flex items-center gap-2">
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -220,9 +218,9 @@ function HomePage() {
                 size="icon"
                 aria-label="New Group"
                 title="Create New Group"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-primary hover:opacity-80"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary/80 backdrop-blur-md text-primary border border-border/40 shadow-xs hover:bg-secondary active:scale-95 transition-all"
               >
-                <Plus className="h-5 w-5" />
+                <Plus className="h-4.5 w-4.5" />
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-md rounded-2xl">
@@ -313,12 +311,12 @@ function HomePage() {
               size="icon"
               onClick={() => setOpen(!open)}
               aria-label="Background color"
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-primary hover:opacity-80"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary/80 backdrop-blur-md text-primary border border-border/40 shadow-xs hover:bg-secondary active:scale-95 transition-all"
             >
-              <Palette className="h-5 w-5" />
+              <Palette className="h-4.5 w-4.5" />
             </Button>
             {open && (
-              <div className="absolute right-0 top-12 z-20 grid w-56 grid-cols-5 gap-2 rounded-2xl bg-popover p-3 shadow-[var(--shadow-soft)] ring-1 ring-border">
+              <div className="absolute right-0 top-12 z-20 grid w-56 grid-cols-5 gap-2 rounded-2xl bg-popover/95 backdrop-blur-xl p-3 shadow-xl ring-1 ring-border">
                 {BACKGROUNDS.map((b) => (
                   <Button
                     variant="ghost"
@@ -330,8 +328,8 @@ function HomePage() {
                       setOpen(false);
                     }}
                     className={cn(
-                      "h-8 w-8 rounded-full ring-1 ring-border",
-                      bg === b.value && "ring-2 ring-primary"
+                      "h-8 w-8 rounded-full ring-1 ring-border transition-transform hover:scale-110",
+                      bg === b.value && "ring-2 ring-primary scale-105"
                     )}
                     style={{ backgroundColor: b.value }}
                   />
@@ -343,41 +341,41 @@ function HomePage() {
       </div>
 
       <div className="relative mt-3">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={tab === "chats" ? "Search chats or find people..." : "Search groups..."}
-          className="w-full rounded-full border border-input bg-background py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-ring"
+          className="w-full rounded-full border border-border/60 bg-background/60 backdrop-blur-md py-2.5 pl-10 pr-4 text-sm shadow-inner transition-all placeholder:text-muted-foreground/70 focus:bg-background/90 focus:border-primary/50 focus:ring-2 focus:ring-primary/20 focus:outline-none"
         />
       </div>
 
-      <div className="mt-3 flex gap-2 border-b border-border/40 pb-1">
+      <div className="mt-3.5 inline-flex p-1 rounded-xl bg-muted/40 backdrop-blur-md border border-border/40 gap-1 w-full sm:w-auto">
         <button
           onClick={() => setTab("chats")}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-colors",
+            "flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all",
             tab === "chats"
-              ? "bg-primary/10 text-primary"
+              ? "bg-background text-primary shadow-xs"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
-          <MessageSquare className="h-4 w-4" />
+          <MessageSquare className="h-3.5 w-3.5" />
           Chats
         </button>
         <button
           onClick={() => setTab("groups")}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-colors",
+            "flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all",
             tab === "groups"
-              ? "bg-primary/10 text-primary"
+              ? "bg-background text-primary shadow-xs"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
-          <Users className="h-4 w-4" />
+          <Users className="h-3.5 w-3.5" />
           Groups
           {groups && groups.some((g) => g.unread > 0) && (
-            <span className="h-2 w-2 rounded-full bg-primary" />
+            <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
           )}
         </button>
       </div>
@@ -387,13 +385,13 @@ function HomePage() {
   return (
     <AppShell header={header} bg={bg}>
       {tab === "chats" ? (
-        <ul className="mx-auto max-w-2xl px-2 py-2">
+        <ul className="mx-auto max-w-2xl px-2 py-3 space-y-1">
           {filtered.map((c) => (
             <li key={c.partner.id}>
               <Link
                 to="/chat/$userId"
                 params={{ userId: c.partner.id }}
-                className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5 transition-colors"
+                className="flex items-center gap-3.5 rounded-2xl px-3.5 py-3 hover:bg-foreground/[0.04] active:scale-[0.99] transition-all duration-150 border border-transparent hover:border-border/30"
               >
                 <Avatar p={c.partner} />
                 <div className="min-w-0 flex-1">
@@ -417,7 +415,7 @@ function HomePage() {
                   </p>
                 </div>
                 {c.unread > 0 && (
-                  <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+                  <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-2 text-xs font-bold text-primary-foreground shadow-xs shadow-primary/30">
                     {c.unread}
                   </span>
                 )}
@@ -425,7 +423,7 @@ function HomePage() {
             </li>
           ))}
           {newPeople.length > 0 && (
-            <li className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <li className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               People
             </li>
           )}
@@ -434,7 +432,7 @@ function HomePage() {
               <Link
                 to="/chat/$userId"
                 params={{ userId: p.id }}
-                className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5 transition-colors"
+                className="flex items-center gap-3.5 rounded-2xl px-3.5 py-3 hover:bg-foreground/[0.04] active:scale-[0.99] transition-all duration-150 border border-transparent hover:border-border/30"
               >
                 <Avatar p={p} />
                 <div className="min-w-0 flex-1">
@@ -445,25 +443,25 @@ function HomePage() {
             </li>
           ))}
           {convos && filtered.length === 0 && newPeople.length === 0 && (
-            <li className="py-10 text-center text-sm text-muted-foreground">
+            <li className="py-12 text-center text-sm text-muted-foreground">
               {q.trim() ? "No one found" : "No chats yet. Search a user name above to start chatting."}
             </li>
           )}
         </ul>
       ) : (
-        <ul className="mx-auto max-w-2xl px-2 py-2">
+        <ul className="mx-auto max-w-2xl px-2 py-3 space-y-1">
           {filteredGroups.map((g) => (
             <li key={g.id}>
               <Link
                 to={`/group/${g.id}` as any}
-                className="flex items-center gap-4 rounded-xl px-3 py-3 hover:bg-foreground/5 transition-colors"
+                className="flex items-center gap-3.5 rounded-2xl px-3.5 py-3 hover:bg-foreground/[0.04] active:scale-[0.99] transition-all duration-150 border border-transparent hover:border-border/30"
               >
                 <GroupAvatar g={g} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between">
                     <p className="truncate text-base font-semibold text-foreground">{g.name}</p>
                     {g.role === "admin" && (
-                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                      <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10.5px] font-semibold text-primary">
                         Admin
                       </span>
                     )}
@@ -489,7 +487,7 @@ function HomePage() {
                   </p>
                 </div>
                 {g.unread > 0 && (
-                  <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+                  <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-2 text-xs font-bold text-primary-foreground shadow-xs shadow-primary/30">
                     {g.unread}
                   </span>
                 )}
@@ -508,7 +506,7 @@ function HomePage() {
                 variant="outline"
                 size="sm"
                 onClick={() => setCreateOpen(true)}
-                className="rounded-xl"
+                className="rounded-xl shadow-xs"
               >
                 <Plus className="mr-1.5 h-4 w-4" /> Create Group
               </Button>
