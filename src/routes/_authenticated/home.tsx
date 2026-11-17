@@ -1,5 +1,5 @@
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Palette, Search, Users, Plus, Check, Loader2, MessageSquare } from "lucide-react";
+import { Palette, Search, Users, Plus, Check, Loader2, MessageSquare, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { Logo } from "@/components/purpose/Logo";
@@ -337,6 +337,15 @@ function HomePage() {
               </div>
             )}
           </div>
+
+          <Link
+            to="/settings"
+            aria-label="Settings"
+            title="Settings"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary/80 backdrop-blur-md text-primary border border-border/40 shadow-xs hover:bg-secondary active:scale-95 transition-all"
+          >
+            <Settings className="h-4.5 w-4.5" />
+          </Link>
         </div>
       </div>
 
