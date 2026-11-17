@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Camera } from "lucide-react";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Camera, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AppShell, useBackground } from "@/components/purpose/AppShell";
 import { supabase } from "@/integrations/supabase/client";
@@ -78,9 +78,19 @@ function ProfilePage() {
     <AppShell
       bg={bg}
       header={
-        <h1 className="mx-auto max-w-2xl px-4 py-3.5 text-lg font-bold tracking-tight text-foreground">
-          Profile
-        </h1>
+        <div className="mx-auto flex max-w-2xl items-center justify-between px-4 py-3">
+          <h1 className="text-lg font-bold tracking-tight text-foreground">
+            Profile
+          </h1>
+          <Link
+            to="/settings"
+            aria-label="Settings"
+            title="Settings"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary/80 backdrop-blur-md text-primary border border-border/40 shadow-xs hover:bg-secondary active:scale-95 transition-all"
+          >
+            <Settings className="h-4.5 w-4.5" />
+          </Link>
+        </div>
       }
     >
       <div className="mx-auto flex max-w-2xl flex-col items-center px-4 py-12">
