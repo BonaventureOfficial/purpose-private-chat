@@ -81,6 +81,76 @@ function GroupAvatar({ g }: { g: { name: string; avatar_url?: string | null } })
   );
 }
 
+
+function GuillocheWatermark() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center overflow-hidden opacity-[0.03] dark:opacity-[0.055] select-none text-foreground"
+    >
+      <svg
+        viewBox="0 0 800 800"
+        className="h-[120vmax] w-[120vmax] max-w-none shrink-0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="0.8"
+      >
+        <circle cx="400" cy="400" r="380" strokeDasharray="3 3" />
+        <circle cx="400" cy="400" r="360" strokeWidth="1.2" />
+        <circle cx="400" cy="400" r="340" strokeDasharray="1 3" />
+        <circle cx="400" cy="400" r="220" />
+        <circle cx="400" cy="400" r="140" strokeDasharray="4 4" />
+        <circle cx="400" cy="400" r="80" />
+        {/* Outer 24-lobe guilloche rosette */}
+        {Array.from({ length: 24 }).map((_, i) => (
+          <ellipse
+            key={`outer-${i}`}
+            cx="400"
+            cy="400"
+            rx="340"
+            ry="120"
+            transform={`rotate(${i * 15} 400 400)`}
+          />
+        ))}
+        {/* Inner 36-lobe fine rosette */}
+        {Array.from({ length: 36 }).map((_, i) => (
+          <ellipse
+            key={`inner-${i}`}
+            cx="400"
+            cy="400"
+            rx="220"
+            ry="70"
+            transform={`rotate(${i * 10} 400 400)`}
+          />
+        ))}
+        {/* Core 18-lobe star rosette */}
+        {Array.from({ length: 18 }).map((_, i) => (
+          <ellipse
+            key={`core-${i}`}
+            cx="400"
+            cy="400"
+            rx="140"
+            ry="40"
+            transform={`rotate(${i * 20} 400 400)`}
+          />
+        ))}
+        {/* Banknote harmonic security waves */}
+        {Array.from({ length: 17 }).map((_, i) => {
+          const y = 80 + i * 40;
+          return (
+            <path
+              key={`wave-${i}`}
+              d={`M 0,${y} Q 200,${y + 14} 400,${y} T 800,${y}`}
+              strokeDasharray="6 4"
+              strokeWidth="0.6"
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function HomePage() {
   const [bg, setBg] = useBackground();
   const [open, setOpen] = useState(false);
@@ -393,7 +463,10 @@ function HomePage() {
 
   return (
     <AppShell header={header} bg={bg}>
-      {tab === "chats" ? (
+      <div className="relative min-h-full">
+        <GuillocheWatermark />
+        <div className="relative z-10">
+          {tab === "chats" ? (
         <ul className="mx-auto max-w-2xl px-2 py-3 space-y-1">
           {filtered.map((c) => (
             <li key={c.partner.id}>
@@ -523,6 +596,8 @@ function HomePage() {
           )}
         </ul>
       )}
+        </div>
+      </div>
     </AppShell>
   );
 }
