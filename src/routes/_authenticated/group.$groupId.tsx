@@ -96,7 +96,7 @@ function time(iso: string) {
 
 function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) {
   if (!text) return null;
-  const pattern = /(```[\s\S]+?```|`[^`\n]+`|\*[^\s*](?:[^*]*?[^\s*])?\*|_[^\s_](?:[^_]*?[^\s_])?_|~[^\s~](?:[^~]*?[^\s~])?~)/g;
+  const pattern = /(```[\s\S]+?```|`[^`\n]+`|\*\*[^\s*](?:[\s\S]*?[^\s*])?\*\*|\*[^\s*](?:[^*]*?[^\s*])?\*|__\S(?:[\s\S]*?\S)?__|_[^\s_](?:[^_]*?[^\s_])?_|~~[^\s~](?:[\s\S]*?[^\s~])?~~|~[^\s~](?:[^~]*?[^\s~])?~)/g;
   const parts: (string | JSX.Element)[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -133,10 +133,22 @@ function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) 
           {token.slice(1, -1)}
         </code>
       );
+    } else if (token.startsWith("**") && token.endsWith("**") && token.length >= 4) {
+      parts.push(
+        <strong key={key} className={cn("font-bold tracking-tight", !isMine && "text-foreground")}>
+          {token.slice(2, -2)}
+        </strong>
+      );
     } else if (token.startsWith("*") && token.endsWith("*") && token.length >= 2) {
       parts.push(
-        <strong key={key} className="font-bold">
+        <strong key={key} className={cn("font-bold tracking-tight", !isMine && "text-foreground")}>
           {token.slice(1, -1)}
+        </strong>
+      );
+    } else if (token.startsWith("__") && token.endsWith("__") && token.length >= 4) {
+      parts.push(
+        <strong key={key} className={cn("font-bold tracking-tight", !isMine && "text-foreground")}>
+          {token.slice(2, -2)}
         </strong>
       );
     } else if (token.startsWith("_") && token.endsWith("_") && token.length >= 2) {
@@ -144,6 +156,12 @@ function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) 
         <em key={key} className="italic">
           {token.slice(1, -1)}
         </em>
+      );
+    } else if (token.startsWith("~~") && token.endsWith("~~") && token.length >= 4) {
+      parts.push(
+        <s key={key} className="line-through opacity-80">
+          {token.slice(2, -2)}
+        </s>
       );
     } else if (token.startsWith("~") && token.endsWith("~") && token.length >= 2) {
       parts.push(
@@ -330,7 +348,7 @@ function GroupChatPage() {
     const details = await getGroupDetails(groupId);
     setGroup(details);
 
-    const msgs = await loadThread(myUserId, groupId);
+    const msgs = (await loadThread(myUserId, groupId)).filter((m) => !m.deleted_at);
     setMessages(msgs);
     void markRead(myUserId, groupId);
   };
@@ -417,10 +435,14 @@ function GroupChatPage() {
     try {
       if (msg.sender_id === me || isAdminOrOwner) {
         await deleteGroupMessage(groupId, msg);
-        toast.success("Message deleted");
       } else {
         await deleteMessage(msg, me);
-        toast.success("Message deleted for you");
+      }
+      // Immediately remove from UI completely: no placeholder, zero residue
+      setMessages((prev) => prev.filter((x) => x.id !== msg.id));
+      if (editingMessage?.id === msg.id) {
+        setEditingMessage(null);
+        setText("");
       }
       void loadData();
     } catch (err: any) {
@@ -507,7 +529,7 @@ function GroupChatPage() {
       {/* Mathematical Guilloche Security Watermark */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden opacity-[0.03] dark:opacity-[0.055] select-none text-foreground"
+        className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center overflow-hidden opacity-[0.035] dark:opacity-[0.06] select-none text-foreground pointer-events-none"
       >
         <svg
           viewBox="0 0 800 800"
@@ -599,7 +621,7 @@ function GroupChatPage() {
 
       {/* Messages Scroll Area */}
       <main className="relative z-10 flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {messages.map((m, idx) => {
+        {messages.filter((m) => !m.deleted_at).map((m, idx) => {
           const isMine = m.sender_id === me;
           const senderName = getSenderName(m.sender_id);
           const senderProfile = getSenderProfile(m.sender_id);
@@ -678,11 +700,7 @@ function GroupChatPage() {
                       </div>
                     )}
 
-                    {m.deleted_at ? (
-                      <em className="text-xs opacity-70">Message deleted</em>
-                    ) : (
-                      <FormattedMessage text={m.body} isMine={isMine} />
-                    )}
+                    <FormattedMessage text={m.body} isMine={isMine} />
 
                     <div
                       className={cn(
@@ -696,8 +714,7 @@ function GroupChatPage() {
                     </div>
                   </div>
 
-                  {!m.deleted_at && (
-                    <DropdownMenu>
+                  <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
@@ -749,7 +766,6 @@ function GroupChatPage() {
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  )}
                 </div>
               </div>
               </div>
