@@ -204,20 +204,29 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
 
   if (item.relay_kind === "message") {
     let payload: EncryptedPayload;
-    if (isE2EE(item.body)) {
-      payload = await decryptE2EE(me, item.body);
-    } else {
+    try {
+      if (isE2EE(item.body)) {
+        payload = await decryptE2EE(me, item.body);
+      } else {
+        payload = {
+          text: item.body,
+          attachment: item.attachment_url
+            ? {
+                url: item.attachment_url,
+                type: item.attachment_type ?? "image",
+                name: item.attachment_name ?? "file",
+                key: null,
+                iv: null,
+              }
+            : null,
+          reply_to_id: item.reply_to_id,
+        };
+      }
+    } catch (decryptErr) {
+      console.error("Failed to decrypt relay message:", decryptErr);
       payload = {
-        text: item.body,
-        attachment: item.attachment_url
-          ? {
-              url: item.attachment_url,
-              type: item.attachment_type ?? "image",
-              name: item.attachment_name ?? "file",
-              key: null,
-              iv: null,
-            }
-          : null,
+        text: "🔒 [Undecryptable message - encryption key mismatch]",
+        attachment: null,
         reply_to_id: item.reply_to_id,
       };
     }
@@ -288,8 +297,20 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
     }
   }
 
-  const { error } = await supabase.rpc("acknowledge_relay", { item_id: item.id });
-  if (error) throw new Error(error.message);
+  try {
+    const { error } = await supabase.rpc("acknowledge_relay", { item_id: item.id });
+    if (error) {
+      console.warn("acknowledge_relay RPC error, attempting fallback delete:", error.message);
+      await supabase.from("messages").delete().eq("id", item.id).eq("recipient_id", me);
+    }
+  } catch (ackErr) {
+    console.error("Failed to acknowledge relay message:", ackErr);
+    try {
+      await supabase.from("messages").delete().eq("id", item.id).eq("recipient_id", me);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 const syncing = new Map<string, Promise<void>>();
@@ -298,10 +319,17 @@ export function syncRelay(me: string): Promise<void> {
   if (current) return current;
   const run = (async () => {
     for (const item of await getRelayOutbox(me)) {
-      const { error } = await supabase.from("messages").insert(item);
-      if (error && error.code !== "23505") throw new Error(error.message);
-      if (item.relay_kind === "message") await updateLocalMessageStatus(me, item.id, { local_status: "sent" });
-      await removeRelayOutbox(me, item.id);
+      try {
+        const { error } = await supabase.from("messages").insert(item);
+        if (error && error.code !== "23505") {
+          console.error("Outbox item push failed:", error.message);
+          continue;
+        }
+        if (item.relay_kind === "message") await updateLocalMessageStatus(me, item.id, { local_status: "sent" });
+        await removeRelayOutbox(me, item.id);
+      } catch (pushErr) {
+        console.error("Error during outbox push:", pushErr);
+      }
     }
 
     for (;;) {
@@ -365,7 +393,19 @@ export async function sendMessage(
 
   await ensureMyE2EEKeys(me);
 
-  const recipient = await getProfile(to);
+  let recipient = await getProfile(to);
+  if (!recipient?.public_key) {
+    // Attempt live re-fetch from profiles table to bypass any stale IndexedDB cache
+    const { data: fresh } = await supabase
+      .from("profiles")
+      .select("id, username, avatar_url, public_key")
+      .eq("id", to)
+      .maybeSingle();
+    if (fresh?.public_key) {
+      recipient = fresh as PublicProfile;
+      await saveLocalContact(me, recipient);
+    }
+  }
   if (!recipient?.public_key) {
     throw new Error(
       "This contact has not initialized their end-to-end encryption keys yet. They must log in to Purpose before receiving messages."
