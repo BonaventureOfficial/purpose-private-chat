@@ -76,7 +76,7 @@ function time(iso: string) {
 
 function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) {
   if (!text) return null;
-  const pattern = /(```[\s\S]+?```|`[^`\n]+`|\*[^\s*](?:[^*]*?[^\s*])?\*|_[^\s_](?:[^_]*?[^\s_])?_|~[^\s~](?:[^~]*?[^\s~])?~)/g;
+  const pattern = /(```[\s\S]+?```|`[^`\n]+`|\*\*[^\s*](?:[\s\S]*?[^\s*])?\*\*|\*[^\s*](?:[^*]*?[^\s*])?\*|__\S(?:[\s\S]*?\S)?__|_[^\s_](?:[^_]*?[^\s_])?_|~~[^\s~](?:[\s\S]*?[^\s~])?~~|~[^\s~](?:[^~]*?[^\s~])?~)/g;
   const parts: (string | JSX.Element)[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -113,10 +113,22 @@ function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) 
           {token.slice(1, -1)}
         </code>
       );
+    } else if (token.startsWith("**") && token.endsWith("**") && token.length >= 4) {
+      parts.push(
+        <strong key={key} className={cn("font-bold tracking-tight", !isMine && "text-foreground")}>
+          {token.slice(2, -2)}
+        </strong>
+      );
     } else if (token.startsWith("*") && token.endsWith("*") && token.length >= 2) {
       parts.push(
-        <strong key={key} className="font-bold">
+        <strong key={key} className={cn("font-bold tracking-tight", !isMine && "text-foreground")}>
           {token.slice(1, -1)}
+        </strong>
+      );
+    } else if (token.startsWith("__") && token.endsWith("__") && token.length >= 4) {
+      parts.push(
+        <strong key={key} className={cn("font-bold tracking-tight", !isMine && "text-foreground")}>
+          {token.slice(2, -2)}
         </strong>
       );
     } else if (token.startsWith("_") && token.endsWith("_") && token.length >= 2) {
@@ -124,6 +136,12 @@ function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) 
         <em key={key} className="italic">
           {token.slice(1, -1)}
         </em>
+      );
+    } else if (token.startsWith("~~") && token.endsWith("~~") && token.length >= 4) {
+      parts.push(
+        <s key={key} className="line-through opacity-80">
+          {token.slice(2, -2)}
+        </s>
       );
     } else if (token.startsWith("~") && token.endsWith("~") && token.length >= 2) {
       parts.push(
@@ -320,7 +338,7 @@ function ChatPage() {
     if (!me) return;
     const load = () => {
       void loadThread(me, userId).then((list) => {
-        setMsgs(list);
+        setMsgs(list.filter((m) => !m.deleted_at));
         setPending((prev) => prev.filter((p) => !list.some((real) => real.id === p.id)));
       });
     };
@@ -491,11 +509,9 @@ function ChatPage() {
     if (!me) return;
     try {
       await deleteMessage(m, me);
-      setMsgs((prev) =>
-        m.sender_id === me
-          ? prev.map((x) => (x.id === m.id ? { ...x, body: "", deleted_at: new Date().toISOString() } : x))
-          : prev.filter((x) => x.id !== m.id)
-      );
+      // Remove completely from view and pending: no residue, no "Message deleted" placeholder
+      setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+      setPending((prev) => prev.filter((x) => x.id !== m.id));
       if (editing?.id === m.id) {
         setEditing(null);
         setText("");
@@ -506,7 +522,7 @@ function ChatPage() {
   }
 
   const name = partner?.username ?? "Chat";
-  const display = [...msgs, ...pending];
+  const display = [...msgs, ...pending].filter((m) => !m.deleted_at);
 
   return (
     <div
@@ -519,7 +535,7 @@ function ChatPage() {
       {/* Mathematical Guilloche Security Watermark */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden opacity-[0.03] dark:opacity-[0.055] select-none text-foreground"
+        className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center overflow-hidden opacity-[0.035] dark:opacity-[0.06] select-none text-foreground pointer-events-none"
       >
         <svg
           viewBox="0 0 800 800"
@@ -685,7 +701,7 @@ function ChatPage() {
                       );
                     })()}
 
-                    {!m.deleted_at && m.attachment_url && (
+                    {m.attachment_url && (
                       <DecryptedAttachment
                         url={m.attachment_url}
                         type={m.attachment_type ?? "image"}
@@ -696,13 +712,8 @@ function ChatPage() {
                       />
                     )}
 
-                    {m.deleted_at ? (
-                      <span className="italic opacity-70">Message deleted</span>
-                    ) : (
-                      <FormattedMessage text={m.body} isMine={mine} />
-                    )}
-
-                    {m.edited_at && !m.deleted_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
+                    <FormattedMessage text={m.body} isMine={mine} />
+                    {m.edited_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
                     <span
                       className={cn(
                         "ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10.5px] font-medium",
@@ -714,8 +725,7 @@ function ChatPage() {
                     </span>
                   </div>
 
-                  {!m.deleted_at && (
-                    <DropdownMenu>
+                  <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
@@ -765,7 +775,6 @@ function ChatPage() {
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  )}
                 </div>
               </Fragment>
             );
