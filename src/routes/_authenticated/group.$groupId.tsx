@@ -503,10 +503,43 @@ function GroupChatPage() {
   const canSend = Boolean(group?.canSend);
 
   return (
-    <div className="flex h-screen flex-col" style={{ backgroundColor: bg }}>
+    <div className="relative flex h-screen flex-col overflow-hidden" style={{ backgroundColor: bg }}>
+      {/* Mathematical Guilloche Security Watermark */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden opacity-[0.03] dark:opacity-[0.055] select-none text-foreground"
+      >
+        <svg
+          viewBox="0 0 800 800"
+          className="h-[120vmax] w-[120vmax] max-w-none shrink-0"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="0.8"
+        >
+          <circle cx="400" cy="400" r="380" strokeDasharray="3 3" />
+          <circle cx="400" cy="400" r="360" strokeWidth="1.2" />
+          <circle cx="400" cy="400" r="340" strokeDasharray="1 3" />
+          <circle cx="400" cy="400" r="220" />
+          <circle cx="400" cy="400" r="140" strokeDasharray="4 4" />
+          <circle cx="400" cy="400" r="80" />
+          {Array.from({ length: 24 }).map((_, i) => (
+            <ellipse key={`outer-${i}`} cx="400" cy="400" rx="340" ry="120" transform={`rotate(${i * 15} 400 400)`} />
+          ))}
+          {Array.from({ length: 36 }).map((_, i) => (
+            <ellipse key={`inner-${i}`} cx="400" cy="400" rx="220" ry="70" transform={`rotate(${i * 10} 400 400)`} />
+          ))}
+          {Array.from({ length: 18 }).map((_, i) => (
+            <ellipse key={`core-${i}`} cx="400" cy="400" rx="140" ry="40" transform={`rotate(${i * 20} 400 400)`} />
+          ))}
+          {Array.from({ length: 17 }).map((_, i) => {
+            const y = 80 + i * 40;
+            return <path key={`wave-${i}`} d={`M 0,${y} Q 200,${y + 14} 400,${y} T 800,${y}`} strokeDasharray="6 4" strokeWidth="0.6" />;
+          })}
+        </svg>
+      </div>
       {/* Group Header */}
       <header
-        className={cn(
+        className={cn("relative z-10",
           "sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 backdrop-blur-xl shadow-xs transition-colors",
           isDark ? "border-white/10 bg-black/55 text-white" : "border-border/50 bg-background/80 text-foreground"
         )}
@@ -565,7 +598,7 @@ function GroupChatPage() {
       </header>
 
       {/* Messages Scroll Area */}
-      <main className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <main className="relative z-10 flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {messages.map((m, idx) => {
           const isMine = m.sender_id === me;
           const senderName = getSenderName(m.sender_id);
@@ -775,7 +808,7 @@ function GroupChatPage() {
       {/* Input Footer or Restricted Banner */}
       <footer
         className={cn(
-          "sticky bottom-0 z-20 border-t p-3 backdrop-blur-xl shadow-lg transition-colors",
+          "relative z-10 sticky bottom-0 z-20 border-t p-3 backdrop-blur-xl shadow-lg transition-colors",
           isDark ? "border-white/10 bg-black/60" : "border-border/50 bg-background/80"
         )}
       >
