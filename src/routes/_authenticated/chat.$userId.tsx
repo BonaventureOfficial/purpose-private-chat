@@ -321,6 +321,11 @@ function ChatPage() {
   const [editing, setEditing] = useState<Message | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const localTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isCurrentlyTypingRef = useRef(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -333,6 +338,65 @@ function ChatPage() {
     void myId().then(setMe);
     void getProfile(userId).then(setPartner);
   }, [userId]);
+
+  useEffect(() => {
+    if (!me || !userId) return;
+
+    const pairId = [me, userId].sort().join(":");
+    const channel = supabase.channel(`presence-${pairId}`, {
+      config: { broadcast: { self: false } },
+    });
+
+    typingChannelRef.current = channel;
+
+    channel
+      .on("broadcast", { event: "typing" }, ({ payload }) => {
+        if (payload?.userId === userId) {
+          setIsPartnerTyping(Boolean(payload.isTyping));
+          if (payload.isTyping) {
+            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+            typingTimerRef.current = setTimeout(() => {
+              setIsPartnerTyping(false);
+            }, 4000);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+      void supabase.removeChannel(channel);
+      typingChannelRef.current = null;
+    };
+  }, [me, userId]);
+
+  function broadcastTyping(isTyping: boolean) {
+    if (!typingChannelRef.current || !me) return;
+    if (isCurrentlyTypingRef.current === isTyping) return;
+    isCurrentlyTypingRef.current = isTyping;
+    typingChannelRef.current.send({
+      type: "broadcast",
+      event: "typing",
+      payload: { userId: me, isTyping },
+    });
+  }
+
+  function handleTextChange(val: string) {
+    setText(val);
+    if (!me || !userId) return;
+
+    if (val.trim().length > 0) {
+      broadcastTyping(true);
+      if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+      localTypingTimeoutRef.current = setTimeout(() => {
+        broadcastTyping(false);
+      }, 2500);
+    } else {
+      broadcastTyping(false);
+      if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+    }
+  }
 
   useEffect(() => {
     if (!me) return;
@@ -429,6 +493,8 @@ function ChatPage() {
     if ((!text.trim() && !staged) || sending || !me) return;
     setSending(true);
     setErr(null);
+    broadcastTyping(false);
+    if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
 
     let att: Attachment | null = null;
     if (staged) {
@@ -621,9 +687,20 @@ function ChatPage() {
             )}
             <div>
               <p className="font-semibold text-sm leading-tight">{name}</p>
-              <p className="flex items-center gap-1 text-[11px] opacity-75">
-                <Lock className="h-3 w-3 text-online" /> End-to-end encrypted
-              </p>
+              {isPartnerTyping ? (
+                <p className="flex items-center gap-1.5 text-[11px] font-medium text-online animate-pulse">
+                  <span className="flex space-x-0.5">
+                    <span className="h-1 w-1 rounded-full bg-online animate-bounce [animation-delay:-0.3s]" />
+                    <span className="h-1 w-1 rounded-full bg-online animate-bounce [animation-delay:-0.15s]" />
+                    <span className="h-1 w-1 rounded-full bg-online animate-bounce" />
+                  </span>
+                  typing...
+                </p>
+              ) : (
+                <p className="flex items-center gap-1 text-[11px] opacity-75">
+                  <Lock className="h-3 w-3 text-online" /> End-to-end encrypted
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -779,6 +856,20 @@ function ChatPage() {
               </Fragment>
             );
           })
+        )}
+        {isPartnerTyping && (
+          <div className="flex items-center gap-2 py-1 px-1 text-xs animate-fade-in">
+            <div className="flex items-center gap-2 rounded-2xl bg-secondary/80 backdrop-blur-md px-3.5 py-2 border border-border/40 shadow-xs">
+              <span className="flex space-x-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce" />
+              </span>
+              <span className="text-[11.5px] font-medium text-muted-foreground">
+                {name} is typing...
+              </span>
+            </div>
+          </div>
         )}
         <div ref={bottomRef} />
       </main>
@@ -948,7 +1039,7 @@ function ChatPage() {
               ref={taRef}
               rows={1}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => handleTextChange(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
