@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Check, Eye, EyeOff, Lock, MessageCircle, Shield, Star, Heart, Send, X } from "lucide-react";
+import { Check, Eye, EyeOff, Lock, MessageCircle, Shield, Star, Heart, Send, X, KeyRound, ArrowLeft, Mail } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Logo } from "./Logo";
 import { isStrongPassword, passwordChecks, syntheticEmail, validateUsername } from "@/lib/purpose";
@@ -23,6 +23,12 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // Forgot password flow
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotInput, setForgotInput] = useState("");
+  const [forgotSuccess, setForgotSuccess] = useState(false);
+
   const checks = passwordChecks(pw);
 
   // The old simulated account (stored on the device) is no longer used.
@@ -35,8 +41,12 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
     if (busy) return;
     setError("");
     const u = name.trim();
-    const invalid = validateUsername(u);
-    if (invalid) return setError(invalid);
+    if (!u) return setError("Please enter your username.");
+
+    if (mode === "signup") {
+      const invalid = validateUsername(u);
+      if (invalid) return setError(invalid);
+    }
 
     setBusy(true);
     try {
@@ -86,18 +96,95 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
         setSuccess(true);
         setTimeout(() => nav({ to: "/home" }), 1200);
       } else {
+        // Sign in: support either username or email
+        let targetEmail = "";
+        if (u.includes("@")) {
+          targetEmail = u.toLowerCase();
+        } else {
+          // Attempt to find real login email if the user linked one
+          try {
+            const { data: resolvedEmail } = await supabase.rpc("get_login_identifier" as any, {
+              p_username: u,
+            });
+            if (resolvedEmail && typeof resolvedEmail === "string") {
+              targetEmail = resolvedEmail;
+            }
+          } catch {
+            // RPC not configured yet; fallback
+          }
+
+          if (!targetEmail) {
+            targetEmail = syntheticEmail(u);
+          }
+        }
+
         const { error: signInErr } = await supabase.auth.signInWithPassword({
-          email: syntheticEmail(u),
+          email: targetEmail,
           password: pw,
         });
+
         setBusy(false);
-        if (signInErr) return setError("Wrong username or password.");
+        if (signInErr) {
+          return setError("Wrong username or password.");
+        }
         nav({ to: "/home" });
       }
     } catch (err: unknown) {
       setBusy(false);
       const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
       setError(msg);
+    }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    const input = forgotInput.trim();
+    if (!input) {
+      setError("Please enter your username or recovery email.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+
+    try {
+      let targetEmail = "";
+      if (input.includes("@")) {
+        targetEmail = input.toLowerCase();
+      } else {
+        // Look up by username
+        try {
+          const { data: resolvedEmail } = await supabase.rpc("get_login_identifier" as any, {
+            p_username: input,
+          });
+          if (resolvedEmail && typeof resolvedEmail === "string" && !resolvedEmail.endsWith("@users.purpose.app")) {
+            targetEmail = resolvedEmail;
+          }
+        } catch {
+          // RPC fallback
+        }
+
+        if (!targetEmail) {
+          setBusy(false);
+          return setError(
+            "No recovery email is linked to this username. If you haven't linked an email in Settings, password recovery via email is not available."
+          );
+        }
+      }
+
+      const redirectUrl = `${window.location.origin}/reset-password`;
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(targetEmail, {
+        redirectTo: redirectUrl,
+      });
+
+      setBusy(false);
+      if (resetErr) {
+        return setError(resetErr.message || "Failed to send reset link.");
+      }
+
+      setForgotSuccess(true);
+    } catch (err: unknown) {
+      setBusy(false);
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
     }
   }
 
@@ -127,20 +214,92 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
             <p className="mt-3 font-semibold text-foreground">Account created successfully!</p>
             <p className="text-sm text-muted-foreground">Taking you home…</p>
           </div>
+        ) : forgotMode ? (
+          <div className="space-y-4 rounded-2xl bg-card/90 p-6 shadow-[var(--shadow-soft)] ring-1 ring-border backdrop-blur">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-foreground">Reset Password</h2>
+                <p className="text-xs text-muted-foreground">Receive a secure reset link</p>
+              </div>
+            </div>
+
+            {forgotSuccess ? (
+              <div className="space-y-3 py-2 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-online/15 text-online">
+                  <Check className="h-6 w-6" />
+                </div>
+                <p className="text-sm font-semibold text-foreground">Reset link sent!</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  If an account matches, a recovery link has been sent to your email inbox. Please check your inbox and spam folder.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotMode(false);
+                    setForgotSuccess(false);
+                    setForgotInput("");
+                  }}
+                  className="mt-2 w-full rounded-xl bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <label className="block">
+                  <span className="text-sm font-medium text-foreground">Username or Recovery Email</span>
+                  <input
+                    value={forgotInput}
+                    onChange={(e) => setForgotInput(e.target.value)}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="mt-1 w-full rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    placeholder="e.g. your_username or you@email.com"
+                  />
+                </label>
+                {error && <p className="text-xs text-destructive">{error}</p>}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotMode(false);
+                      setError("");
+                    }}
+                    className="w-1/3 rounded-xl border border-border bg-background py-3 text-sm font-semibold text-foreground hover:bg-secondary"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={busy || !forgotInput.trim()}
+                    className="w-2/3 rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                  >
+                    {busy ? "Sending…" : "Send Link"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         ) : (
           <form onSubmit={submit} className="space-y-4 rounded-2xl bg-card/90 p-6 shadow-[var(--shadow-soft)] ring-1 ring-border backdrop-blur">
             <label className="block">
-              <span className="text-sm font-medium text-foreground">{mode === "signup" ? "Create Username" : "Username"}</span>
+              <span className="text-sm font-medium text-foreground">
+                {mode === "signup" ? "Create Username" : "Username or Email"}
+              </span>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                maxLength={30}
+                maxLength={mode === "signup" ? 30 : 100}
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                autoComplete="username"
+                autoComplete={mode === "signup" ? "username" : "username email"}
                 className="mt-1 w-full rounded-xl border border-input bg-background px-4 py-3 outline-none focus:ring-2 focus:ring-ring"
-                placeholder="e.g. purpose_fan"
+                placeholder={mode === "signup" ? "e.g. purpose_fan" : "e.g. purpose_fan or name@email.com"}
               />
             </label>
             <label className="block">
@@ -168,6 +327,24 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
                 </button>
               </div>
             </label>
+
+            {mode === "signin" && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotMode(true);
+                    setError("");
+                    setForgotSuccess(false);
+                    setForgotInput(name.trim());
+                  }}
+                  className="text-xs font-medium text-primary hover:underline transition-colors"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             {mode === "signup" && (
               <ul className="grid grid-cols-2 gap-1 text-xs">
                 {([["length", "8+ characters"], ["digit", "A number"], ["upper", "An uppercase"], ["lower", "A lowercase"], ["symbol", "A symbol"]] as const).map(([k, l]) => (
