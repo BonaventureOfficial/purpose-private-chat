@@ -1,4 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
+import { supabase } from "@/integrations/supabase/client";
 import {
   ArrowLeft,
   Camera,
@@ -375,11 +376,15 @@ function ChatPage() {
     if (!typingChannelRef.current || !me) return;
     if (isCurrentlyTypingRef.current === isTyping) return;
     isCurrentlyTypingRef.current = isTyping;
-    typingChannelRef.current.send({
-      type: "broadcast",
-      event: "typing",
-      payload: { userId: me, isTyping },
-    });
+    try {
+      void typingChannelRef.current.send({
+        type: "broadcast",
+        event: "typing",
+        payload: { userId: me, isTyping },
+      });
+    } catch (err) {
+      console.warn("Failed to broadcast typing:", err);
+    }
   }
 
   function handleTextChange(val: string) {
