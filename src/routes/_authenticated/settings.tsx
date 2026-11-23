@@ -75,6 +75,8 @@ function SettingsPage() {
   // Inputs state
   const [emailInput, setEmailInput] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
+  const [linkedEmail, setLinkedEmail] = useState<string | null>(null);
+  const [savingEmail, setSavingEmail] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -90,6 +92,18 @@ function SettingsPage() {
       }
     });
     void myId().then((id) => setUserId(id));
+
+    void supabase.auth.getUser().then(({ data }) => {
+      const em = data.user?.email;
+      const meta = data.user?.user_metadata?.recovery_email;
+      if (em && !em.endsWith("@users.purpose.app")) {
+        setLinkedEmail(em);
+        setEmailInput(em);
+      } else if (meta) {
+        setLinkedEmail(meta);
+        setEmailInput(meta);
+      }
+    });
   }, []);
 
   async function handleSignOut() {
@@ -102,6 +116,39 @@ function SettingsPage() {
     await supabase.auth.signOut();
     toast.success("Signed out successfully");
     nav({ to: "/signin", replace: true });
+  }
+
+  async function handleSaveEmail() {
+    const trimmed = emailInput.trim().toLowerCase();
+    if (!trimmed || !trimmed.includes("@") || !trimmed.includes(".")) {
+      toast.error("Please enter a valid email address.");
+      return;
+    }
+
+    setSavingEmail(true);
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        email: trimmed,
+        data: { recovery_email: trimmed },
+      });
+      if (error) throw error;
+
+      if (data.user?.new_email) {
+        toast.success(
+          `Confirmation link sent to ${trimmed}. Please check your inbox to confirm the change.`,
+          { duration: 7000 }
+        );
+      } else {
+        toast.success(`Recovery email saved as ${trimmed}!`);
+      }
+      setLinkedEmail(trimmed);
+      setModalType(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update recovery email.";
+      toast.error(msg);
+    } finally {
+      setSavingEmail(false);
+    }
   }
 
   async function handlePasswordChange() {
@@ -292,13 +339,21 @@ function SettingsPage() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">Add Email</span>
-                    <Badge variant="outline" className="text-[10px] text-muted-foreground border-border/70">
-                      Not Linked
-                    </Badge>
+                    <span className="text-sm font-semibold text-foreground">
+                      {linkedEmail ? "Recovery Email" : "Add Email"}
+                    </span>
+                    {linkedEmail ? (
+                      <Badge variant="outline" className="text-[10px] bg-online/10 text-online border-online/30">
+                        Active
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] text-muted-foreground border-border/70">
+                        Not Linked
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Link email for emergency recovery and security notices
+                    {linkedEmail ? linkedEmail : "Link email to receive password reset links"}
                   </p>
                 </div>
               </div>
@@ -554,15 +609,17 @@ function SettingsPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-500/10 text-sky-500">
                 <Mail className="h-5 w-5" />
               </div>
-              <DialogTitle className="text-lg font-bold">Add Email</DialogTitle>
+              <DialogTitle className="text-lg font-bold">
+                {linkedEmail ? "Update Recovery Email" : "Add Recovery Email"}
+              </DialogTitle>
             </div>
             <DialogDescription className="text-xs text-muted-foreground pt-1">
-              Add a trusted recovery email address for account restoration and security alerts.
+              Connect a real email address to receive password reset links if you ever forget your password.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
-              <Label className="text-xs font-semibold text-muted-foreground">Recovery Email Address</Label>
+              <Label className="text-xs font-semibold text-muted-foreground">Your Email Address</Label>
               <Input
                 type="email"
                 placeholder="name@example.com"
@@ -571,24 +628,28 @@ function SettingsPage() {
                 className="mt-1.5 rounded-xl"
               />
             </div>
-            <div className="rounded-xl border border-border/60 bg-secondary/30 p-3 text-xs text-muted-foreground">
-              Your email is used solely for emergency security alerts. Purpose never sends marketing spam or shares contact details.
+            <div className="rounded-xl border border-border/60 bg-secondary/30 p-3 text-xs text-muted-foreground leading-relaxed">
+              {linkedEmail ? (
+                <>Current linked email: <strong className="text-foreground">{linkedEmail}</strong>. You can change it at any time.</>
+              ) : (
+                "Your email is used exclusively for password resets and critical security alerts. Purpose never sends spam."
+              )}
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex gap-2">
             <Button
-              onClick={() => {
-                if (!emailInput.trim()) {
-                  toast.error("Please enter a valid email address");
-                  return;
-                }
-                toast.success(`Recovery email "${emailInput}" saved for activation.`);
-                setModalType(null);
-                setEmailInput("");
-              }}
-              className="w-full rounded-xl"
+              variant="outline"
+              onClick={() => setModalType(null)}
+              className="w-1/3 rounded-xl"
             >
-              Save Email
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveEmail}
+              disabled={savingEmail || !emailInput.trim()}
+              className="w-2/3 rounded-xl"
+            >
+              {savingEmail ? "Saving…" : "Save Email"}
             </Button>
           </DialogFooter>
         </DialogContent>
