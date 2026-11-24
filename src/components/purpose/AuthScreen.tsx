@@ -166,7 +166,7 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
         if (!targetEmail) {
           setBusy(false);
           return setError(
-            "No recovery email is linked to this username. If you haven't linked an email in Settings, password recovery via email is not available."
+            "No recovery email found for this username. Make sure you added your recovery email in Settings first, or enter that email address directly."
           );
         }
       }
@@ -362,13 +362,32 @@ export function AuthScreen({ mode }: { mode: "signup" | "signin" }) {
             >
               {busy ? "PLEASE WAIT…" : mode === "signup" ? "CONFIRM" : "Sign in"}
             </button>
-            <p className="text-center text-sm text-muted-foreground">
-              {mode === "signup" ? (
-                <>Already have an account? <Link to="/signin" className="font-semibold text-primary">Sign in</Link></>
-              ) : (
-                <>New here? <Link to="/" className="font-semibold text-primary">Create account</Link></>
+            <div className="space-y-2 text-center text-sm text-muted-foreground">
+              <p>
+                {mode === "signup" ? (
+                  <>Already have an account? <Link to="/signin" className="font-semibold text-primary">Sign in</Link></>
+                ) : (
+                  <>New here? <Link to="/" className="font-semibold text-primary">Create account</Link></>
+                )}
+              </p>
+              {mode === "signup" && (
+                <p className="text-xs">
+                  Forgot your password?{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotMode(true);
+                      setError("");
+                      setForgotSuccess(false);
+                      setForgotInput(name.trim());
+                    }}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    Reset it here
+                  </button>
+                </p>
               )}
-            </p>
+            </div>
           </form>
         )}
       </div>
