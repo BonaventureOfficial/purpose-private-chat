@@ -54,6 +54,7 @@ import {
   getCachedDecryptedMedia,
   cacheDecryptedMedia,
 } from "@/lib/crypto";
+import { PhotoEditorModal } from "@/components/purpose/PhotoEditorModal";
 import { useBackground } from "@/components/purpose/AppShell";
 import { isDarkBackground } from "@/lib/purpose";
 
@@ -318,6 +319,8 @@ function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [staged, setStaged] = useState<{ file: File; kind: FileKind } | null>(null);
+  const [photoToEdit, setPhotoToEdit] = useState<File | null>(null);
+  const [isPhotoEditorOpen, setIsPhotoEditorOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [recording, setRecording] = useState(false);
@@ -433,7 +436,12 @@ function ChatPage() {
   async function stageFile(file: File) {
     try {
       const kind = await validateFile(file);
-      setStaged({ file, kind });
+      if (kind === "image") {
+        setPhotoToEdit(file);
+        setIsPhotoEditorOpen(true);
+      } else {
+        setStaged({ file, kind });
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unsupported file.");
     }
@@ -918,9 +926,25 @@ function ChatPage() {
             <span className="truncate">
               Attached ({staged.kind}): <strong>{staged.file.name}</strong>
             </span>
-            <button onClick={() => setStaged(null)} className="p-1 hover:opacity-70" aria-label="Remove attachment">
-              <X className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              {staged.kind === "image" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhotoToEdit(staged.file);
+                    setIsPhotoEditorOpen(true);
+                  }}
+                  className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 font-medium text-primary hover:bg-primary/20 transition active:scale-95"
+                  title="Edit photo with 3D tools"
+                >
+                  <Pencil className="h-3 w-3" />
+                  <span>Edit</span>
+                </button>
+              )}
+              <button onClick={() => setStaged(null)} className="p-1 hover:opacity-70" aria-label="Remove attachment">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -1098,6 +1122,28 @@ function ChatPage() {
           )}
         </div>
       </footer>
+
+      {isPhotoEditorOpen && photoToEdit && (
+        <PhotoEditorModal
+          file={photoToEdit}
+          isOpen={isPhotoEditorOpen}
+          onClose={() => {
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+          }}
+          onSave={(editedFile) => {
+            setStaged({ file: editedFile, kind: "image" });
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+            toast.success("Photo edited and attached!");
+          }}
+          onSkipEdit={(origFile) => {
+            setStaged({ file: origFile, kind: "image" });
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+          }}
+        />
+      )}
     </div>
   );
 }
