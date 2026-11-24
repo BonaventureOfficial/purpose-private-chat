@@ -30,7 +30,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   MESSAGE_MAX,
@@ -321,6 +321,19 @@ function ChatPage() {
   const [staged, setStaged] = useState<{ file: File; kind: FileKind } | null>(null);
   const [photoToEdit, setPhotoToEdit] = useState<File | null>(null);
   const [isPhotoEditorOpen, setIsPhotoEditorOpen] = useState(false);
+
+  const stagedPreviewUrl = useMemo(() => {
+    if (staged?.kind === "image") {
+      return URL.createObjectURL(staged.file);
+    }
+    return null;
+  }, [staged]);
+
+  useEffect(() => {
+    return () => {
+      if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
+    };
+  }, [stagedPreviewUrl]);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [recording, setRecording] = useState(false);
@@ -922,27 +935,60 @@ function ChatPage() {
         )}
 
         {staged && (
-          <div className="mb-2 flex items-center justify-between rounded-lg bg-secondary px-3 py-1.5 text-xs">
-            <span className="truncate">
-              Attached ({staged.kind}): <strong>{staged.file.name}</strong>
-            </span>
-            <div className="flex items-center gap-1.5">
-              {staged.kind === "image" && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPhotoToEdit(staged.file);
-                    setIsPhotoEditorOpen(true);
-                  }}
-                  className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 font-medium text-primary hover:bg-primary/20 transition active:scale-95"
-                  title="Edit photo with 3D tools"
-                >
-                  <Pencil className="h-3 w-3" />
-                  <span>Edit</span>
-                </button>
-              )}
-              <button onClick={() => setStaged(null)} className="p-1 hover:opacity-70" aria-label="Remove attachment">
-                <X className="h-3.5 w-3.5" />
+          <div className="mb-3 overflow-hidden rounded-2xl border border-white/15 bg-black/40 p-2.5 shadow-xl backdrop-blur-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                {staged.kind === "image" ? (
+                  <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-amber-500/30 shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
+                    <img
+                      src={stagedPreviewUrl || undefined}
+                      alt="Selected preview"
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                    <FileText className="h-6 w-6" />
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-xs font-semibold text-foreground">
+                      {staged.file.name}
+                    </span>
+                    <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-400">
+                      PHOTO
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Ready to send • End-to-end encrypted
+                  </p>
+
+                  {staged.kind === "image" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPhotoToEdit(staged.file);
+                        setIsPhotoEditorOpen(true);
+                      }}
+                      className="mt-1 flex items-center gap-1.5 text-xs font-bold text-amber-400 hover:text-amber-300 transition active:scale-95"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      <span>Edit with 3D Tools (Arrow, Frame, Text, Draw)</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setStaged(null)}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition active:scale-95"
+                aria-label="Remove attachment"
+              >
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>
