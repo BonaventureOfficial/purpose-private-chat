@@ -9,8 +9,6 @@ import {
   Type,
   Pencil,
   Sparkles,
-  Palette,
-  Minus,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -92,57 +90,71 @@ export function PhotoEditorModal({
   onSave,
   onSkipEdit,
 }: PhotoEditorModalProps) {
-  const [imgUrl, setImgUrl] = useState<string | null>(null);
-  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [tool, setTool] = useState<ToolType>("pen");
-  const [color, setColor] = useState<string>("#F59E0B"); // Purpose Gold default
+  const [color, setColor] = useState<string>("#F59E0B");
   const [strokeWidth, setStrokeWidth] = useState<number>(8);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [activeDraft, setActiveDraft] = useState<Annotation | null>(null);
-  const [textInputOpen, setTextInputOpen] = useState(false);
-  const [textValue, setTextValue] = useState("");
-  const [textTargetPoint, setTextTargetPoint] = useState<Point>({ x: 0.5, y: 0.5 });
-  const [draggingTextId, setDraggingTextId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const isPointerDownRef = useRef(false);
-  const dragStartPointRef = useRef<Point | null>(null);
+  // Live in-place text state
+  const [liveTextActive, setLiveTextActive] = useState(false);
+  const [liveTextPos, setLiveTextPos] = useState<Point>({ x: 0.5, y: 0.5 });
+  const [liveTextValue, setLiveTextValue] = useState("");
 
-  // Load image blob URL
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgElementRef = useRef<HTMLImageElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveTextInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Mutable refs for zero-latency 60fps drawing without React re-render lag
+  const annotationsRef = useRef<Annotation[]>([]);
+  const draftRef = useRef<Annotation | null>(null);
+  const isPointerDownRef = useRef(false);
+  const currentToolRef = useRef<ToolType>("pen");
+  const currentColorRef = useRef<string>("#F59E0B");
+  const currentStrokeWidthRef = useRef<number>(8);
+  const draggingTextIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentToolRef.current = tool;
+  }, [tool]);
+
+  useEffect(() => {
+    currentColorRef.current = color;
+  }, [color]);
+
+  useEffect(() => {
+    currentStrokeWidthRef.current = strokeWidth;
+  }, [strokeWidth]);
+
+  useEffect(() => {
+    annotationsRef.current = annotations;
+  }, [annotations]);
+
+  // Read file as base64 Data URL so it is 100% reliable and never revokes unexpectedly
   useEffect(() => {
     if (!file) {
-      setImgUrl(null);
+      setImgSrc(null);
       return;
     }
-    const url = URL.createObjectURL(file);
-    setImgUrl(url);
-
-    const img = new Image();
-    img.onload = () => {
-      setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-      imgRef.current = img;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImgSrc(reader.result as string);
     };
-    img.src = url;
-
-    return () => {
-      URL.revokeObjectURL(url);
-    };
+    reader.readAsDataURL(file);
   }, [file]);
 
-  // Convert pointer event to normalized 0..1 coordinates relative to canvas
-  const getNormalizedPoint = useCallback((e: React.PointerEvent<HTMLCanvasElement>): Point | null => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-    return { x, y };
-  }, []);
+  // Focus live text input when opened
+  useEffect(() => {
+    if (liveTextActive) {
+      setTimeout(() => {
+        liveTextInputRef.current?.focus();
+      }, 50);
+    }
+  }, [liveTextActive]);
 
-  // Helper to draw rounded rectangle safely
+  // Safe rounded rect helper
   const drawRoundedRect = (
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -165,188 +177,178 @@ export function PhotoEditorModal({
     ctx.closePath();
   };
 
-  // Draw an annotation onto any canvas context
-  const renderAnnotation = useCallback(
-    (
-      ctx: CanvasRenderingContext2D,
-      ann: Annotation,
-      width: number,
-      height: number,
-      scaleMultiplier: number = 1
-    ) => {
-      const S = (Math.min(width, height) / 500) * scaleMultiplier;
+  // Render a single annotation on any context
+  const renderItem = (
+    ctx: CanvasRenderingContext2D,
+    ann: Annotation,
+    w: number,
+    h: number
+  ) => {
+    const S = Math.min(w, h) / 500;
+    ctx.save();
 
-      ctx.save();
+    // Tactile 3D drop shadow
+    ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
+    ctx.shadowBlur = 6 * S;
+    ctx.shadowOffsetX = 2 * S;
+    ctx.shadowOffsetY = 3.5 * S;
 
-      // Tactile 3D drop shadow
-      ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
-      ctx.shadowBlur = 6 * S;
-      ctx.shadowOffsetX = 2 * S;
-      ctx.shadowOffsetY = 3.5 * S;
+    if (ann.type === "pen") {
+      if (ann.points.length < 2) {
+        ctx.restore();
+        return;
+      }
+      ctx.strokeStyle = ann.color;
+      ctx.lineWidth = Math.max(2, ann.width * S * 0.8);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
 
-      if (ann.type === "pen") {
-        if (ann.points.length < 2) {
-          ctx.restore();
-          return;
-        }
-        ctx.strokeStyle = ann.color;
-        ctx.lineWidth = Math.max(2, ann.width * S * 0.8);
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
+      ctx.beginPath();
+      const p0 = ann.points[0];
+      ctx.moveTo(p0.x * w, p0.y * h);
+      for (let i = 1; i < ann.points.length; i++) {
+        const p = ann.points[i];
+        ctx.lineTo(p.x * w, p.y * h);
+      }
+      ctx.stroke();
+    } else if (ann.type === "arrow") {
+      const sx = ann.start.x * w;
+      const sy = ann.start.y * h;
+      const ex = ann.end.x * w;
+      const ey = ann.end.y * h;
+      const dx = ex - sx;
+      const dy = ey - sy;
+      const dist = Math.hypot(dx, dy);
 
-        ctx.beginPath();
-        const p0 = ann.points[0];
-        ctx.moveTo(p0.x * width, p0.y * height);
-
-        for (let i = 1; i < ann.points.length; i++) {
-          const pt = ann.points[i];
-          ctx.lineTo(pt.x * width, pt.y * height);
-        }
-        ctx.stroke();
-      } else if (ann.type === "arrow") {
-        const sx = ann.start.x * width;
-        const sy = ann.start.y * height;
-        const ex = ann.end.x * width;
-        const ey = ann.end.y * height;
-
-        const dx = ex - sx;
-        const dy = ey - sy;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 5) {
-          ctx.restore();
-          return;
-        }
-
-        const angle = Math.atan2(dy, dx);
-        const headLen = Math.max(16 * S, ann.width * S * 2.8);
-        const headAngle = Math.PI / 6;
-
-        // Draw shaft
-        const shaftEndX = ex - Math.cos(angle) * (headLen * 0.6);
-        const shaftEndY = ey - Math.sin(angle) * (headLen * 0.6);
-
-        ctx.strokeStyle = ann.color;
-        ctx.lineWidth = Math.max(3, ann.width * S * 0.9);
-        ctx.lineCap = "round";
-
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(shaftEndX, shaftEndY);
-        ctx.stroke();
-
-        // Draw 3D arrowhead
-        ctx.fillStyle = ann.color;
-        ctx.beginPath();
-        ctx.moveTo(ex, ey);
-        ctx.lineTo(
-          ex - headLen * Math.cos(angle - headAngle),
-          ey - headLen * Math.sin(angle - headAngle)
-        );
-        ctx.lineTo(
-          ex - headLen * 0.65 * Math.cos(angle),
-          ey - headLen * 0.65 * Math.sin(angle)
-        );
-        ctx.lineTo(
-          ex - headLen * 0.7 * Math.cos(angle + headAngle),
-          ey - headLen * 0.7 * Math.sin(angle + headAngle)
-        );
-        ctx.closePath();
-        ctx.fill();
-      } else if (ann.type === "frame") {
-        const x1 = ann.start.x * width;
-        const y1 = ann.start.y * height;
-        const x2 = ann.end.x * width;
-        const y2 = ann.end.y * height;
-
-        const fx = Math.min(x1, x2);
-        const fy = Math.min(y1, y2);
-        const fw = Math.abs(x2 - x1);
-        const fh = Math.abs(y2 - y1);
-
-        if (fw < 6 || fh < 6) {
-          ctx.restore();
-          return;
-        }
-
-        // Main frame box with tactile stroke
-        ctx.strokeStyle = ann.color;
-        ctx.lineWidth = Math.max(2, ann.width * S * 0.7);
-        drawRoundedRect(ctx, fx, fy, fw, fh, 8 * S);
-        ctx.stroke();
-
-        // 3D Corner brackets (viewfinder target feel)
-        const cornerLen = Math.min(fw * 0.28, fh * 0.28, 22 * S);
-        ctx.lineWidth = Math.max(3.5, ann.width * S * 1.2);
-
-        // Top-left
-        ctx.beginPath();
-        ctx.moveTo(fx, fy + cornerLen);
-        ctx.lineTo(fx, fy);
-        ctx.lineTo(fx + cornerLen, fy);
-        ctx.stroke();
-
-        // Top-right
-        ctx.beginPath();
-        ctx.moveTo(fx + fw - cornerLen, fy);
-        ctx.lineTo(fx + fw, fy);
-        ctx.lineTo(fx + fw, fy + cornerLen);
-        ctx.stroke();
-
-        // Bottom-left
-        ctx.beginPath();
-        ctx.moveTo(fx, fy + fh - cornerLen);
-        ctx.lineTo(fx, fy + fh);
-        ctx.lineTo(fx + cornerLen, fy + fh);
-        ctx.stroke();
-
-        // Bottom-right
-        ctx.beginPath();
-        ctx.moveTo(fx + fw - cornerLen, fy + fh);
-        ctx.lineTo(fx + fw, fy + fh);
-        ctx.lineTo(fx + fw, fy + fh - cornerLen);
-        ctx.stroke();
-      } else if (ann.type === "text") {
-        const tx = ann.position.x * width;
-        const ty = ann.position.y * height;
-        const fontSize = Math.max(16, ann.size * S * 2.2);
-
-        ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-        const metrics = ctx.measureText(ann.text);
-        const padX = 14 * S;
-        const padY = 8 * S;
-        const boxW = metrics.width + padX * 2;
-        const boxH = fontSize + padY * 2;
-        const boxX = tx - boxW / 2;
-        const boxY = ty - boxH / 2;
-
-        // 3D Frosted dark pill badge
-        ctx.shadowColor = "rgba(0, 0, 0, 0.75)";
-        ctx.shadowBlur = 10 * S;
-        ctx.shadowOffsetX = 2 * S;
-        ctx.shadowOffsetY = 5 * S;
-
-        ctx.fillStyle = "rgba(15, 15, 20, 0.85)";
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
-        ctx.lineWidth = 1.5 * S;
-        drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 12 * S);
-        ctx.fill();
-        ctx.stroke();
-
-        // Text with crisp color
-        ctx.shadowColor = "transparent";
-        ctx.fillStyle = ann.color;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(ann.text, tx, ty);
+      if (dist < 4) {
+        ctx.restore();
+        return;
       }
 
-      ctx.restore();
-    },
-    []
-  );
+      const angle = Math.atan2(dy, dx);
+      const headLen = Math.max(16 * S, ann.width * S * 2.8);
+      const headAngle = Math.PI / 6;
 
-  // Redraw preview canvas
-  const redraw = useCallback(() => {
+      const shaftEndX = ex - Math.cos(angle) * (headLen * 0.6);
+      const shaftEndY = ey - Math.sin(angle) * (headLen * 0.6);
+
+      ctx.strokeStyle = ann.color;
+      ctx.lineWidth = Math.max(3, ann.width * S * 0.9);
+      ctx.lineCap = "round";
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(shaftEndX, shaftEndY);
+      ctx.stroke();
+
+      // Sharp filled 3D arrowhead
+      ctx.fillStyle = ann.color;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(
+        ex - headLen * Math.cos(angle - headAngle),
+        ey - headLen * Math.sin(angle - headAngle)
+      );
+      ctx.lineTo(
+        ex - headLen * 0.65 * Math.cos(angle),
+        ey - headLen * 0.65 * Math.sin(angle)
+      );
+      ctx.lineTo(
+        ex - headLen * 0.7 * Math.cos(angle + headAngle),
+        ey - headLen * 0.7 * Math.sin(angle + headAngle)
+      );
+      ctx.closePath();
+      ctx.fill();
+    } else if (ann.type === "frame") {
+      const x1 = ann.start.x * w;
+      const y1 = ann.start.y * h;
+      const x2 = ann.end.x * w;
+      const y2 = ann.end.y * h;
+
+      const fx = Math.min(x1, x2);
+      const fy = Math.min(y1, y2);
+      const fw = Math.abs(x2 - x1);
+      const fh = Math.abs(y2 - y1);
+
+      if (fw < 5 || fh < 5) {
+        ctx.restore();
+        return;
+      }
+
+      ctx.strokeStyle = ann.color;
+      ctx.lineWidth = Math.max(2, ann.width * S * 0.7);
+      drawRoundedRect(ctx, fx, fy, fw, fh, 8 * S);
+      ctx.stroke();
+
+      // Viewfinder 3D corner brackets
+      const cornerLen = Math.min(fw * 0.28, fh * 0.28, 22 * S);
+      ctx.lineWidth = Math.max(3.5, ann.width * S * 1.2);
+
+      // Top-Left
+      ctx.beginPath();
+      ctx.moveTo(fx, fy + cornerLen);
+      ctx.lineTo(fx, fy);
+      ctx.lineTo(fx + cornerLen, fy);
+      ctx.stroke();
+
+      // Top-Right
+      ctx.beginPath();
+      ctx.moveTo(fx + fw - cornerLen, fy);
+      ctx.lineTo(fx + fw, fy);
+      ctx.lineTo(fx + fw, fy + cornerLen);
+      ctx.stroke();
+
+      // Bottom-Left
+      ctx.beginPath();
+      ctx.moveTo(fx, fy + fh - cornerLen);
+      ctx.lineTo(fx, fy + fh);
+      ctx.lineTo(fx + cornerLen, fy + fh);
+      ctx.stroke();
+
+      // Bottom-Right
+      ctx.beginPath();
+      ctx.moveTo(fx + fw - cornerLen, fy + fh);
+      ctx.lineTo(fx + fw, fy + fh);
+      ctx.lineTo(fx + fw, fy + fh - cornerLen);
+      ctx.stroke();
+    } else if (ann.type === "text") {
+      const tx = ann.position.x * w;
+      const ty = ann.position.y * h;
+      const fontSize = Math.max(16, ann.size * S * 2.2);
+
+      ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+      const metrics = ctx.measureText(ann.text);
+      const padX = 14 * S;
+      const padY = 8 * S;
+      const boxW = metrics.width + padX * 2;
+      const boxH = fontSize + padY * 2;
+      const boxX = tx - boxW / 2;
+      const boxY = ty - boxH / 2;
+
+      ctx.shadowColor = "rgba(0, 0, 0, 0.75)";
+      ctx.shadowBlur = 10 * S;
+      ctx.shadowOffsetX = 2 * S;
+      ctx.shadowOffsetY = 5 * S;
+
+      ctx.fillStyle = "rgba(15, 15, 20, 0.85)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+      ctx.lineWidth = 1.5 * S;
+      drawRoundedRect(ctx, boxX, boxY, boxW, boxH, 12 * S);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.shadowColor = "transparent";
+      ctx.fillStyle = ann.color;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(ann.text, tx, ty);
+    }
+
+    ctx.restore();
+  };
+
+  // Synchronous, zero-lag canvas scene redraw
+  const drawScene = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -355,258 +357,241 @@ export function PhotoEditorModal({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Draw all confirmed annotations
-    for (const ann of annotations) {
-      renderAnnotation(ctx, ann, canvas.width, canvas.height, 1);
+    for (const ann of annotationsRef.current) {
+      renderItem(ctx, ann, canvas.width, canvas.height);
     }
 
-    // Draw active draft
-    if (activeDraft) {
-      renderAnnotation(ctx, activeDraft, canvas.width, canvas.height, 1);
+    // Draw active live draft in real-time
+    if (draftRef.current) {
+      renderItem(ctx, draftRef.current, canvas.width, canvas.height);
     }
-  }, [annotations, activeDraft, renderAnnotation]);
+  };
 
-  useEffect(() => {
-    redraw();
-  }, [redraw]);
-
-  // Adjust canvas size to match image layout
-  const syncCanvasSize = useCallback(() => {
+  // Sync canvas dimensions directly to displayed image bounding rectangle
+  const syncCanvasToImage = () => {
+    const img = imgElementRef.current;
     const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container || naturalSize.w === 0 || naturalSize.h === 0) return;
+    if (!img || !canvas) return;
 
-    const contRect = container.getBoundingClientRect();
-    const contW = contRect.width - 24;
-    const contH = contRect.height - 24;
+    const rect = img.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
 
-    const imgAspect = naturalSize.w / naturalSize.h;
-    const contAspect = contW / contH;
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+    drawScene();
+  };
 
-    let displayW = 0;
-    let displayH = 0;
+  // Redraw when confirmed annotations list changes
+  useEffect(() => {
+    drawScene();
+  }, [annotations]);
 
-    if (imgAspect > contAspect) {
-      displayW = contW;
-      displayH = contW / imgAspect;
-    } else {
-      displayH = contH;
-      displayW = contH * imgAspect;
-    }
-
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = displayW * dpr;
-    canvas.height = displayH * dpr;
-    canvas.style.width = `${displayW}px`;
-    canvas.style.height = `${displayH}px`;
-
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.scale(dpr, dpr);
-    }
-    redraw();
-  }, [naturalSize, redraw]);
+  // When image loads or window resizes, match canvas size
+  const handleImageLoad = () => {
+    syncCanvasToImage();
+  };
 
   useEffect(() => {
-    syncCanvasSize();
-    window.addEventListener("resize", syncCanvasSize);
-    return () => window.removeEventListener("resize", syncCanvasSize);
-  }, [syncCanvasSize]);
+    window.addEventListener("resize", syncCanvasToImage);
+    return () => window.removeEventListener("resize", syncCanvasToImage);
+  }, []);
 
-  // Handle pointer down (mouse or finger)
+  // Compute normalized relative point (0..1)
+  const getNormalizedPoint = (e: React.PointerEvent<HTMLCanvasElement>): Point | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    return { x, y };
+  };
+
+  // Real-time Pointer Down
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const pt = getNormalizedPoint(e);
     if (!pt) return;
+
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     isPointerDownRef.current = true;
-    dragStartPointRef.current = pt;
 
-    // Check if user tapped near an existing text item to drag it
-    if (tool === "text") {
-      const clickedText = [...annotations].reverse().find((ann) => {
+    // Check if dragging an existing text item
+    if (currentToolRef.current === "text") {
+      const clicked = [...annotationsRef.current].reverse().find((ann) => {
         if (ann.type !== "text") return false;
         const dx = Math.abs(ann.position.x - pt.x);
         const dy = Math.abs(ann.position.y - pt.y);
         return dx < 0.12 && dy < 0.08;
       });
 
-      if (clickedText) {
-        setDraggingTextId(clickedText.id);
+      if (clicked) {
+        draggingTextIdRef.current = clicked.id;
         return;
       }
+
+      // If clicked empty area in text mode, start in-place text entry right there!
+      setLiveTextPos(pt);
+      setLiveTextValue("");
+      setLiveTextActive(true);
+      return;
     }
 
-    if (tool === "pen") {
-      setActiveDraft({
+    if (currentToolRef.current === "pen") {
+      draftRef.current = {
         id: `pen-${Date.now()}`,
         type: "pen",
         points: [pt],
-        color,
-        width: strokeWidth,
-      });
-    } else if (tool === "arrow") {
-      setActiveDraft({
+        color: currentColorRef.current,
+        width: currentStrokeWidthRef.current,
+      };
+      drawScene();
+    } else if (currentToolRef.current === "arrow") {
+      draftRef.current = {
         id: `arrow-${Date.now()}`,
         type: "arrow",
         start: pt,
         end: pt,
-        color,
-        width: strokeWidth,
-      });
-    } else if (tool === "frame") {
-      setActiveDraft({
+        color: currentColorRef.current,
+        width: currentStrokeWidthRef.current,
+      };
+      drawScene();
+    } else if (currentToolRef.current === "frame") {
+      draftRef.current = {
         id: `frame-${Date.now()}`,
         type: "frame",
         start: pt,
         end: pt,
-        color,
-        width: strokeWidth,
-      });
-    } else if (tool === "text") {
-      // Open text prompt at this point
-      setTextTargetPoint(pt);
-      setTextValue("");
-      setTextInputOpen(true);
+        color: currentColorRef.current,
+        width: currentStrokeWidthRef.current,
+      };
+      drawScene();
     }
   };
 
+  // Real-time Pointer Move: direct synchronous render, ZERO lag!
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isPointerDownRef.current) return;
     const pt = getNormalizedPoint(e);
     if (!pt) return;
 
-    if (draggingTextId) {
-      setAnnotations((prev) =>
-        prev.map((ann) =>
-          ann.id === draggingTextId && ann.type === "text"
-            ? { ...ann, position: pt }
-            : ann
-        )
+    if (draggingTextIdRef.current) {
+      annotationsRef.current = annotationsRef.current.map((ann) =>
+        ann.id === draggingTextIdRef.current && ann.type === "text"
+          ? { ...ann, position: pt }
+          : ann
       );
+      drawScene();
       return;
     }
 
-    if (!activeDraft) return;
+    if (!draftRef.current) return;
 
-    if (activeDraft.type === "pen") {
-      setActiveDraft((prev) => {
-        if (!prev || prev.type !== "pen") return prev;
-        return {
-          ...prev,
-          points: [...prev.points, pt],
-        };
-      });
-    } else if (activeDraft.type === "arrow") {
-      setActiveDraft((prev) => {
-        if (!prev || prev.type !== "arrow") return prev;
-        return {
-          ...prev,
-          end: pt,
-        };
-      });
-    } else if (activeDraft.type === "frame") {
-      setActiveDraft((prev) => {
-        if (!prev || prev.type !== "frame") return prev;
-        return {
-          ...prev,
-          end: pt,
-        };
-      });
+    if (draftRef.current.type === "pen") {
+      draftRef.current.points.push(pt);
+      drawScene();
+    } else if (draftRef.current.type === "arrow") {
+      draftRef.current.end = pt;
+      drawScene();
+    } else if (draftRef.current.type === "frame") {
+      draftRef.current.end = pt;
+      drawScene();
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  // Pointer Up: commit draft
+  const handlePointerUp = () => {
     isPointerDownRef.current = false;
-    dragStartPointRef.current = null;
 
-    if (draggingTextId) {
-      setDraggingTextId(null);
+    if (draggingTextIdRef.current) {
+      draggingTextIdRef.current = null;
+      setAnnotations([...annotationsRef.current]);
       return;
     }
 
-    if (!activeDraft) return;
+    if (!draftRef.current) return;
 
-    // Validate draft before saving
+    const draft = draftRef.current;
     let isValid = false;
-    if (activeDraft.type === "pen" && activeDraft.points.length > 1) {
+
+    if (draft.type === "pen" && draft.points.length > 1) {
       isValid = true;
-    } else if (activeDraft.type === "arrow") {
-      const dist = Math.hypot(
-        activeDraft.end.x - activeDraft.start.x,
-        activeDraft.end.y - activeDraft.start.y
-      );
+    } else if (draft.type === "arrow") {
+      const dist = Math.hypot(draft.end.x - draft.start.x, draft.end.y - draft.start.y);
       isValid = dist > 0.02;
-    } else if (activeDraft.type === "frame") {
-      const w = Math.abs(activeDraft.end.x - activeDraft.start.x);
-      const h = Math.abs(activeDraft.end.y - activeDraft.start.y);
+    } else if (draft.type === "frame") {
+      const w = Math.abs(draft.end.x - draft.start.x);
+      const h = Math.abs(draft.end.y - draft.start.y);
       isValid = w > 0.02 && h > 0.02;
     }
 
     if (isValid) {
-      setAnnotations((prev) => [...prev, activeDraft]);
+      annotationsRef.current.push(draft);
+      setAnnotations([...annotationsRef.current]);
     }
 
-    setActiveDraft(null);
+    draftRef.current = null;
+    drawScene();
   };
 
-  // Add text annotation
-  const handleConfirmText = () => {
-    if (!textValue.trim()) {
-      setTextInputOpen(false);
-      return;
+  // Finalize live text
+  const finalizeLiveText = () => {
+    if (liveTextValue.trim()) {
+      const newText: TextAnnotation = {
+        id: `text-${Date.now()}`,
+        type: "text",
+        position: liveTextPos,
+        text: liveTextValue.trim(),
+        color,
+        size: strokeWidth >= 14 ? 20 : strokeWidth >= 8 ? 16 : 13,
+      };
+      annotationsRef.current.push(newText);
+      setAnnotations([...annotationsRef.current]);
     }
-
-    const newText: TextAnnotation = {
-      id: `text-${Date.now()}`,
-      type: "text",
-      position: textTargetPoint,
-      text: textValue.trim(),
-      color,
-      size: strokeWidth >= 14 ? 20 : strokeWidth >= 8 ? 16 : 13,
-    };
-
-    setAnnotations((prev) => [...prev, newText]);
-    setTextValue("");
-    setTextInputOpen(false);
+    setLiveTextActive(false);
+    setLiveTextValue("");
   };
 
   const handleUndo = () => {
-    setAnnotations((prev) => prev.slice(0, -1));
+    if (annotationsRef.current.length === 0) return;
+    annotationsRef.current.pop();
+    setAnnotations([...annotationsRef.current]);
+    drawScene();
   };
 
   const handleClear = () => {
-    if (annotations.length === 0) return;
+    if (annotationsRef.current.length === 0) return;
+    annotationsRef.current = [];
     setAnnotations([]);
-    toast("All annotations cleared");
+    drawScene();
+    toast("Annotations cleared");
   };
 
-  // Full native resolution export
+  // Save at 100% native resolution
   const handleSave = async () => {
-    if (!file || !imgRef.current) return;
+    if (!file || !imgElementRef.current) return;
     setIsProcessing(true);
 
     try {
-      const img = imgRef.current;
+      const img = imgElementRef.current;
       const offscreen = document.createElement("canvas");
-      offscreen.width = img.naturalWidth;
-      offscreen.height = img.naturalHeight;
+      offscreen.width = img.naturalWidth || img.width;
+      offscreen.height = img.naturalHeight || img.height;
 
       const ctx = offscreen.getContext("2d");
-      if (!ctx) throw new Error("Could not initialize canvas context");
+      if (!ctx) throw new Error("Could not initialize export context");
 
-      // Draw original image at 100% native resolution
-      ctx.drawImage(img, 0, 0);
+      // Draw original base image
+      ctx.drawImage(img, 0, 0, offscreen.width, offscreen.height);
 
-      // Render annotations at full scale
-      for (const ann of annotations) {
-        renderAnnotation(ctx, ann, offscreen.width, offscreen.height, 1);
+      // Draw all annotations at native high-resolution scale
+      for (const ann of annotationsRef.current) {
+        renderItem(ctx, ann, offscreen.width, offscreen.height);
       }
 
-      // Export as high-quality JPEG
       offscreen.toBlob(
         (blob) => {
           setIsProcessing(false);
           if (!blob) {
-            toast.error("Failed to generate edited photo");
+            toast.error("Failed to generate photo");
             return;
           }
           const baseName = file.name.replace(/\.[^/.]+$/, "");
@@ -630,7 +615,7 @@ export function PhotoEditorModal({
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950/98 text-white select-none touch-none overflow-hidden backdrop-blur-xl animate-in fade-in duration-200">
       {/* Top 3D Header Bar */}
-      <div className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-white/10 bg-black/60 px-3 backdrop-blur-md">
+      <div className="relative z-20 flex h-14 shrink-0 items-center justify-between border-b border-white/10 bg-black/60 px-3 backdrop-blur-md">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -697,16 +682,18 @@ export function PhotoEditorModal({
         ref={containerRef}
         className="relative flex flex-1 items-center justify-center p-3 overflow-hidden bg-radial from-zinc-900 to-zinc-950"
       >
-        {imgUrl && (
-          <div className="relative inline-block max-h-full max-w-full shadow-[0_12px_40px_rgba(0,0,0,0.9)] rounded-lg overflow-hidden border border-white/10">
-            {/* Base Image */}
+        {imgSrc && (
+          <div className="relative inline-block max-h-full max-w-full shadow-[0_12px_40px_rgba(0,0,0,0.9)] rounded-xl overflow-hidden border border-white/10">
+            {/* The Photo Visually Displayed "Telle Quelle" */}
             <img
-              src={imgUrl}
+              ref={imgElementRef}
+              src={imgSrc}
               alt="Photo preview"
+              onLoad={handleImageLoad}
               className="max-h-[calc(100vh-170px)] max-w-[calc(100vw-24px)] object-contain select-none pointer-events-none block"
             />
 
-            {/* Interactive Drawing Canvas */}
+            {/* Zero-Latency Interactive Canvas */}
             <canvas
               ref={canvasRef}
               onPointerDown={handlePointerDown}
@@ -715,18 +702,57 @@ export function PhotoEditorModal({
               onPointerCancel={handlePointerUp}
               className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
             />
+
+            {/* Live In-Place Text Editor Directly on Photo */}
+            {liveTextActive && (
+              <div
+                style={{
+                  left: `${liveTextPos.x * 100}%`,
+                  top: `${liveTextPos.y * 100}%`,
+                  transform: "translate(-50%, -50%)",
+                }}
+                className="absolute z-30 pointer-events-auto"
+              >
+                <div className="flex items-center gap-2 rounded-2xl border border-white/30 bg-black/85 px-4 py-2 shadow-[0_10px_30px_rgba(0,0,0,0.9)] backdrop-blur-xl animate-in zoom-in-95 duration-100">
+                  <input
+                    ref={liveTextInputRef}
+                    type="text"
+                    value={liveTextValue}
+                    onChange={(e) => setLiveTextValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") finalizeLiveText();
+                      if (e.key === "Escape") setLiveTextActive(false);
+                    }}
+                    placeholder="Type caption..."
+                    maxLength={80}
+                    style={{ color }}
+                    className="w-40 sm:w-56 bg-transparent text-center font-bold text-sm sm:text-base outline-none placeholder:text-white/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={finalizeLiveText}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400 text-black shadow-md hover:brightness-110 active:scale-95"
+                  >
+                    <Check className="h-4 w-4 stroke-[3]" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Bottom Tactile 3D Studio Dock */}
-      <div className="relative z-10 flex shrink-0 flex-col gap-2.5 border-t border-white/10 bg-black/75 px-3 py-3 backdrop-blur-xl">
+      <div className="relative z-20 flex shrink-0 flex-col gap-2.5 border-t border-white/10 bg-black/75 px-3 py-3 backdrop-blur-xl">
         {/* Row 1: Tools selection */}
         <div className="flex items-center justify-center gap-3">
           {/* Pen / Freehand */}
           <button
             type="button"
-            onClick={() => setTool("pen")}
+            onClick={() => {
+              if (liveTextActive) finalizeLiveText();
+              setTool("pen");
+            }}
             className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-150 ${
               tool === "pen"
                 ? "bg-gradient-to-b from-amber-400 to-amber-500 text-zinc-950 shadow-[0_4px_14px_rgba(245,158,11,0.5),inset_0_1px_2px_rgba(255,255,255,0.4)] scale-105"
@@ -740,7 +766,10 @@ export function PhotoEditorModal({
           {/* 3D Arrow */}
           <button
             type="button"
-            onClick={() => setTool("arrow")}
+            onClick={() => {
+              if (liveTextActive) finalizeLiveText();
+              setTool("arrow");
+            }}
             className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-150 ${
               tool === "arrow"
                 ? "bg-gradient-to-b from-amber-400 to-amber-500 text-zinc-950 shadow-[0_4px_14px_rgba(245,158,11,0.5),inset_0_1px_2px_rgba(255,255,255,0.4)] scale-105"
@@ -754,7 +783,10 @@ export function PhotoEditorModal({
           {/* 3D Frame */}
           <button
             type="button"
-            onClick={() => setTool("frame")}
+            onClick={() => {
+              if (liveTextActive) finalizeLiveText();
+              setTool("frame");
+            }}
             className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-150 ${
               tool === "frame"
                 ? "bg-gradient-to-b from-amber-400 to-amber-500 text-zinc-950 shadow-[0_4px_14px_rgba(245,158,11,0.5),inset_0_1px_2px_rgba(255,255,255,0.4)] scale-105"
@@ -768,7 +800,12 @@ export function PhotoEditorModal({
           {/* 3D Text */}
           <button
             type="button"
-            onClick={() => setTool("text")}
+            onClick={() => {
+              setTool("text");
+              setLiveTextPos({ x: 0.5, y: 0.5 });
+              setLiveTextValue("");
+              setLiveTextActive(true);
+            }}
             className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-150 ${
               tool === "text"
                 ? "bg-gradient-to-b from-amber-400 to-amber-500 text-zinc-950 shadow-[0_4px_14px_rgba(245,158,11,0.5),inset_0_1px_2px_rgba(255,255,255,0.4)] scale-105"
@@ -819,46 +856,6 @@ export function PhotoEditorModal({
           </div>
         </div>
       </div>
-
-      {/* Text Input Modal Popup */}
-      {textInputOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
-          <div className="w-full max-w-sm rounded-2xl border border-white/20 bg-zinc-900/95 p-5 shadow-[0_16px_50px_rgba(0,0,0,0.9)] animate-in zoom-in-95 duration-150">
-            <h3 className="mb-2 text-sm font-semibold tracking-wide text-white">
-              Add 3D Text Label
-            </h3>
-            <input
-              type="text"
-              autoFocus
-              value={textValue}
-              onChange={(e) => setTextValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleConfirmText();
-                if (e.key === "Escape") setTextInputOpen(false);
-              }}
-              placeholder="Type your caption..."
-              maxLength={80}
-              className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2.5 text-sm text-white placeholder:text-white/40 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/20"
-            />
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setTextInputOpen(false)}
-                className="rounded-xl border border-white/10 px-3.5 py-1.5 text-xs font-medium text-white/70 hover:bg-white/10"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmText}
-                className="rounded-xl border border-amber-400/40 bg-gradient-to-b from-amber-400 to-amber-500 px-4 py-1.5 text-xs font-bold text-zinc-950 shadow-[0_2px_10px_rgba(245,158,11,0.4)] hover:brightness-110 active:scale-95"
-              >
-                Place Text
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
