@@ -83,16 +83,19 @@ export type GroupMember = {
   profile: PublicProfile;
 };
 
-export type GroupDetails = {
+export interface GroupDetails {
   id: string;
   name: string;
   avatar_url: string | null;
   created_by: string;
   created_at: string;
-  updated_at: string;
-  members: GroupMember[];
+  updated_at?: string;
+  only_admins_can_send: boolean;
+  members: GroupMemberWithProfile[];
   myRole: "admin" | "member";
-};
+  isOwner: boolean;
+  canSend: boolean;
+}
 
 export const MESSAGE_MAX = 4000;
 const COLS = "*";
@@ -206,6 +209,7 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
     let payload: EncryptedPayload;
     try {
       if (isE2EE(item.body)) {
+        await ensureMyE2EEKeys(me);
         payload = await decryptE2EE(me, item.body);
       } else {
         payload = {
@@ -351,11 +355,21 @@ export function syncRelay(me: string): Promise<void> {
 
 export function startRelay(me: string): () => void {
   let stopped = false;
-  void ensureMyE2EEKeys(me).catch((err) => console.error("E2EE key init error:", err));
 
   const sync = () => {
     if (!stopped) void syncRelay(me).catch(() => {});
   };
+
+  // Ensure cryptographic keys are fully initialized in IndexedDB before syncing incoming messages
+  void ensureMyE2EEKeys(me)
+    .then(() => {
+      if (!stopped) sync();
+    })
+    .catch((err) => {
+      console.error("E2EE key init error:", err);
+      if (!stopped) sync();
+    });
+
   const channel = supabase
     .channel(`relay-${me}-${crypto.randomUUID()}`)
     .on(
@@ -369,7 +383,6 @@ export function startRelay(me: string): () => void {
   const timer = window.setInterval(sync, 3000);
   window.addEventListener("online", sync);
   window.addEventListener("focus", sync);
-  sync();
   return () => {
     stopped = true;
     window.clearInterval(timer);
@@ -393,19 +406,22 @@ export async function sendMessage(
 
   await ensureMyE2EEKeys(me);
 
-  let recipient = await getProfile(to);
-  if (!recipient?.public_key) {
-    // Attempt live re-fetch from profiles table to bypass any stale IndexedDB cache
-    const { data: fresh } = await supabase
-      .from("profiles")
-      .select("id, username, avatar_url, public_key")
-      .eq("id", to)
-      .maybeSingle();
-    if (fresh?.public_key) {
-      recipient = fresh as PublicProfile;
-      await saveLocalContact(me, recipient);
-    }
+  // Always fetch fresh live public_key from Supabase to prevent stale key mismatch!
+  let recipient: PublicProfile | null = null;
+  const { data: fresh } = await supabase
+    .from("profiles")
+    .select("id, username, avatar_url, public_key")
+    .eq("id", to)
+    .maybeSingle();
+
+  if (fresh?.public_key) {
+    recipient = fresh as PublicProfile;
+    await saveLocalContact(me, recipient);
+  } else {
+    // Fallback to local cached contact if network was temporarily unreachable
+    recipient = await getProfile(to);
   }
+
   if (!recipient?.public_key) {
     throw new Error(
       "This contact has not initialized their end-to-end encryption keys yet. They must log in to Purpose before receiving messages."
@@ -552,18 +568,8 @@ export interface GroupMemberWithProfile {
   profile: PublicProfile;
 }
 
-export interface GroupDetails {
-  id: string;
-  name: string;
-  avatar_url: string | null;
-  created_by: string;
-  created_at: string;
-  only_admins_can_send: boolean;
-  members: GroupMemberWithProfile[];
-  myRole: "admin" | "member";
-  isOwner: boolean;
-  canSend: boolean;
-}
+// GroupDetails definition unified above
+
 
 export async function listMyGroups(me: string): Promise<GroupSummary[]> {
   try {
