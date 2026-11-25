@@ -12,6 +12,8 @@ export type EncryptedPayload = {
   text: string;
   attachment?: EncryptedAttachment | null;
   reply_to_id?: string | null;
+  message_id?: string | null;
+  group_id?: string | null;
 };
 
 type KeyVaultRecord = {
@@ -19,6 +21,7 @@ type KeyVaultRecord = {
   privateKey: CryptoKey;
   publicKeyString: string;
   createdAt: string;
+  previousKeys?: { privateKey: CryptoKey; publicKeyString: string }[];
 };
 
 const KEY_DB_NAME = "purpose_e2ee_vault";
@@ -87,7 +90,8 @@ function bytesToBase64(bytes: Uint8Array): string {
 function base64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64);
   const len = binary.length;
-  const bytes = new Uint8Array(len);
+  const buffer = new ArrayBuffer(len);
+  const bytes = new Uint8Array(buffer);
   for (let i = 0; i < len; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
@@ -163,17 +167,24 @@ export async function ensureMyE2EEKeys(userId: string): Promise<string> {
     await saveKeyRecord(record);
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("public_key")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (!profile || profile.public_key !== record.publicKeyString) {
-    await supabase
+  try {
+    const { data: profile } = await supabase
       .from("profiles")
-      .update({ public_key: record.publicKeyString })
-      .eq("id", userId);
+      .select("public_key")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (!profile || profile.public_key !== record.publicKeyString) {
+      const { error: updateErr } = await supabase
+        .from("profiles")
+        .update({ public_key: record.publicKeyString })
+        .eq("id", userId);
+      if (updateErr) {
+        console.warn("Could not sync public_key to profiles in Supabase:", updateErr.message);
+      }
+    }
+  } catch (syncErr) {
+    console.warn("Error syncing public_key:", syncErr);
   }
 
   return record.publicKeyString;
@@ -250,7 +261,11 @@ export async function decryptE2EE(
     throw new Error("Message is not end-to-end encrypted.");
   }
 
-  const record = await getKeyRecord(userId);
+  let record = await getKeyRecord(userId);
+  if (!record || !record.privateKey) {
+    await ensureMyE2EEKeys(userId);
+    record = await getKeyRecord(userId);
+  }
   if (!record || !record.privateKey) {
     throw new Error("Local private encryption key not found in secure vault.");
   }
@@ -266,22 +281,36 @@ export async function decryptE2EE(
     []
   );
 
-  const aesKey = await window.crypto.subtle.deriveKey(
-    { name: "ECDH", public: ephemeralPubKey },
+  const candidateKeys: CryptoKey[] = [
     record.privateKey,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["decrypt"]
-  );
+    ...(record.previousKeys?.map((k) => k.privateKey) ?? []),
+  ];
 
-  const decryptedBuffer = await window.crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToBytes(envelope.iv) },
-    aesKey,
-    base64ToBytes(envelope.ct)
-  );
+  let lastError: any = null;
+  for (const privKey of candidateKeys) {
+    try {
+      const aesKey = await window.crypto.subtle.deriveKey(
+        { name: "ECDH", public: ephemeralPubKey },
+        privKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
 
-  const decryptedText = new TextDecoder().decode(decryptedBuffer);
-  return JSON.parse(decryptedText) as EncryptedPayload;
+      const decryptedBuffer = await window.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(envelope.iv) as any },
+        aesKey,
+        base64ToBytes(envelope.ct) as any
+      );
+
+      const decryptedText = new TextDecoder().decode(decryptedBuffer);
+      return JSON.parse(decryptedText) as EncryptedPayload;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("Decryption failed: cryptographic key mismatch.");
 }
 
 export function isE2EE(body: string): boolean {
@@ -337,14 +366,14 @@ export async function decryptAttachment(
 
   const aesKey = await window.crypto.subtle.importKey(
     "raw",
-    keyBytes,
+    keyBytes as any,
     { name: "AES-GCM" },
     false,
     ["decrypt"]
   );
 
   const plaintextBuffer = await window.crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: ivBytes },
+    { name: "AES-GCM", iv: ivBytes as any },
     aesKey,
     ciphertext
   );
