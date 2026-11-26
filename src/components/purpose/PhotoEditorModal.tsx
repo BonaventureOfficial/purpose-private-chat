@@ -70,10 +70,12 @@ export type Annotation =
 
 export interface PhotoEditorModalProps {
   file: File | null;
-  isOpen: boolean;
+  isOpen?: boolean;
+  open?: boolean;
   onClose: () => void;
   onSave: (editedFile: File) => void;
   onSkipEdit?: (originalFile: File) => void;
+  onSkip?: (originalFile: File) => void;
 }
 
 const PALETTE = [
@@ -94,10 +96,14 @@ const STROKE_WIDTHS = [
 export function PhotoEditorModal({
   file,
   isOpen,
+  open,
   onClose,
   onSave,
   onSkipEdit,
+  onSkip,
 }: PhotoEditorModalProps) {
+  const activeOpen = Boolean(isOpen ?? open);
+  const handleSkip = onSkipEdit || onSkip;
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [tool, setTool] = useState<ToolType>("frame");
   const [color, setColor] = useState<string>("#F59E0B");
@@ -1433,7 +1439,7 @@ export function PhotoEditorModal({
     }
   };
 
-  if (!isOpen || !file) return null;
+  if (!activeOpen || !file) return null;
 
   const selectedAnnotation = annotations.find((a) => a.id === selectedId);
 
@@ -1517,10 +1523,10 @@ export function PhotoEditorModal({
             </>
           )}
 
-          {onSkipEdit && annotations.length === 0 && (
+          {handleSkip && annotations.length === 0 && (
             <button
               type="button"
-              onClick={() => onSkipEdit(file)}
+              onClick={() => handleSkip(file)}
               className="rounded-xl border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition hover:bg-white/10 hover:text-white active:scale-95"
             >
               Skip
