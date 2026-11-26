@@ -2,6 +2,8 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Camera,
+  Mic,
+  Square,
   Check,
   FileText,
   Loader2,
@@ -43,7 +45,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   MESSAGE_MAX,
@@ -73,6 +75,7 @@ import {
   getCachedDecryptedMedia,
   cacheDecryptedMedia,
 } from "@/lib/crypto";
+import { PhotoEditorModal } from "@/components/purpose/PhotoEditorModal";
 import { useBackground } from "@/components/purpose/AppShell";
 import { isDarkBackground } from "@/lib/purpose";
 
@@ -216,12 +219,16 @@ function DecryptedMedia({
     setLoading(true);
     setError(false);
 
-    downloadAndDecryptMedia(
-      url,
-      attKey,
-      attIv,
-      type === "image" ? "image/jpeg" : type === "video" ? "video/mp4" : "application/octet-stream"
-    )
+    const mime =
+      type === "image"
+        ? "image/jpeg"
+        : type === "video"
+        ? "video/mp4"
+        : type === "audio"
+        ? "audio/webm"
+        : "application/pdf";
+
+    downloadAndDecryptMedia(url, attKey, attIv, mime)
       .then((decryptedBlobUrl) => {
         if (!cancelled) {
           cacheDecryptedMedia(url, decryptedBlobUrl);
@@ -327,14 +334,37 @@ function GroupChatPage() {
 
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [staged, setStaged] = useState<{ file: File; kind: FileKind } | null>(null);
+  const [photoToEdit, setPhotoToEdit] = useState<File | null>(null);
+  const [isPhotoEditorOpen, setIsPhotoEditorOpen] = useState(false);
+
+  const stagedPreviewUrl = useMemo(() => {
+    if (staged?.kind === "image") {
+      return URL.createObjectURL(staged.file);
+    }
+    return null;
+  }, [staged]);
+
+  useEffect(() => {
+    return () => {
+      if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
+    };
+  }, [stagedPreviewUrl]);
+
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [updatingSettings, setUpdatingSettings] = useState(false);
 
+  // Voice recording state
+  const [recording, setRecording] = useState(false);
+  const [recSecs, setRecSecs] = useState(0);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const cancelRecRef = useRef(false);
+
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const loadData = async () => {
@@ -370,9 +400,64 @@ function GroupChatPage() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
 
+
+  useEffect(() => {
+    if (!recording) return;
+    const t = setInterval(() => setRecSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [recording]);
+
+  async function stageFile(file: File) {
+    try {
+      const kind = await validateFile(file);
+      if (kind === "image") {
+        setPhotoToEdit(file);
+        setIsPhotoEditorOpen(true);
+      } else {
+        setStaged({ file, kind });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unsupported file.");
+    }
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const types = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+      const mime = types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      cancelRecRef.current = false;
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (cancelRecRef.current) return;
+        const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+        const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type });
+        void stageFile(file);
+      };
+      recRef.current = rec;
+      rec.start();
+      setRecSecs(0);
+      setRecording(true);
+    } catch {
+      toast.error("Microphone access denied or unavailable.");
+    }
+  }
+
+  function stopRecording(cancel = false) {
+    cancelRecRef.current = cancel;
+    if (recRef.current && recRef.current.state !== "inactive") {
+      recRef.current.stop();
+    }
+    setRecording(false);
+  }
   const handleSend = async () => {
-    if (!text.trim() && !attachment) return;
-    if (sending) return;
+    if ((!text.trim() && !staged) || sending) return;
 
     if (editingMessage) {
       try {
@@ -387,46 +472,39 @@ function GroupChatPage() {
     }
 
     setSending(true);
+    let att: Attachment | null = null;
+    if (staged) {
+      setUploading(true);
+      try {
+        const { encryptedFile, key, iv } = await encryptAttachment(staged.file);
+        const up = await uploadMedia(encryptedFile, "media");
+        att = {
+          url: up,
+          type: staged.kind,
+          name: staged.file.name,
+          key,
+          iv,
+        };
+        cacheDecryptedMedia(up, URL.createObjectURL(staged.file));
+      } catch (e: any) {
+        setUploading(false);
+        setSending(false);
+        toast.error(e?.message || "Failed to upload encrypted file");
+        return;
+      }
+      setUploading(false);
+    }
+
     try {
-      await sendGroupMessage(groupId, text.trim(), replyTo?.id ?? null, attachment);
+      await sendGroupMessage(groupId, text.trim(), replyTo?.id ?? null, att);
       setText("");
-      setAttachment(null);
+      setStaged(null);
       setReplyTo(null);
       void loadData();
     } catch (err: any) {
       toast.error(err?.message || "Failed to send message");
     } finally {
       setSending(false);
-    }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const validation = validateFile(file);
-    if (!validation.valid) {
-      toast.error(validation.error);
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const { encryptedBlob, key, iv } = await encryptAttachment(file);
-      const url = await uploadMedia(encryptedBlob, validation.kind as FileKind, file.name);
-      setAttachment({
-        url,
-        type: validation.kind as "image" | "video" | "pdf" | "audio",
-        name: file.name,
-        key,
-        iv,
-      });
-      toast.success("Attachment ready (encrypted)");
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to upload file");
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -775,49 +853,87 @@ function GroupChatPage() {
         <div ref={endRef} />
       </main>
 
-      {/* Reply or Editing Banner */}
-      {(replyTo || editingMessage || attachment) && (
+      {/* Reply or Editing or Staged Attachment Banner */}
+      {(replyTo || editingMessage || staged) && (
         <div
           className={cn(
-            "flex items-center justify-between px-4 py-2 text-xs border-t",
+            "flex items-center justify-between gap-3 px-4 py-2 text-xs border-t",
             isDark ? "bg-neutral-900 border-white/10 text-white" : "bg-neutral-50 border-black/5"
           )}
         >
-          <div className="flex items-center gap-2 truncate">
-            {replyTo && (
-              <>
-                <CornerUpLeft className="h-3.5 w-3.5 text-primary shrink-0" />
-                <span className="truncate">
-                  Replying to <strong>{getSenderName(replyTo.sender_id)}</strong>: {replyTo.body}
+          {staged ? (
+            <div className="flex items-center gap-3 overflow-hidden">
+              {staged.kind === "image" ? (
+                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg border bg-black/10">
+                  <img
+                    src={stagedPreviewUrl || undefined}
+                    alt="Preview"
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+              ) : (
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <FileText className="h-5 w-5" />
+                </div>
+              )}
+              <div className="flex flex-col truncate">
+                <span className="truncate font-medium">{staged.file.name}</span>
+                <span className="text-[11px] text-muted-foreground capitalize">
+                  {staged.kind} • {(staged.file.size / 1024).toFixed(0)} KB
                 </span>
-              </>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 truncate">
+              {replyTo && (
+                <>
+                  <CornerUpLeft className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span className="truncate">
+                    Replying to <strong>{getSenderName(replyTo.sender_id)}</strong>: {replyTo.body}
+                  </span>
+                </>
+              )}
+              {editingMessage && (
+                <>
+                  <Pencil className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span>Editing message</span>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-1 shrink-0">
+            {staged?.kind === "image" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setPhotoToEdit(staged.file);
+                  setIsPhotoEditorOpen(true);
+                }}
+                className="h-8 gap-1.5 px-2.5 text-xs text-primary hover:text-primary"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                <span>Edit 3D</span>
+              </Button>
             )}
-            {editingMessage && (
-              <>
-                <Pencil className="h-3.5 w-3.5 text-primary shrink-0" />
-                <span>Editing message</span>
-              </>
-            )}
-            {attachment && (
-              <>
-                <Paperclip className="h-3.5 w-3.5 text-primary shrink-0" />
-                <span className="truncate">Ready: {attachment.name}</span>
-              </>
-            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                if (staged) setStaged(null);
+                if (replyTo) setReplyTo(null);
+                if (editingMessage) {
+                  setEditingMessage(null);
+                  setText("");
+                }
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 rounded-full"
-            onClick={() => {
-              setReplyTo(null);
-              setEditingMessage(null);
-              setAttachment(null);
-              if (editingMessage) setText("");
-            }}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
         </div>
       )}
 
@@ -874,62 +990,137 @@ function GroupChatPage() {
               </button>
             </div>
             <div className="flex items-end gap-2">
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-              className="hidden"
-              accept="image/*,video/*,audio/*,application/pdf"
-            />
+              <input
+                type="file"
+                ref={cameraInputRef}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void stageFile(f);
+                  e.target.value = "";
+                }}
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+              />
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void stageFile(f);
+                  e.target.value = "";
+                }}
+                accept="image/*,video/*,audio/*,application/pdf"
+                className="hidden"
+              />
 
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="h-10 w-10 shrink-0 rounded-full"
-              title="Attach file"
-            >
-              {uploading ? (
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              {recording ? (
+                <div className="flex flex-1 items-center gap-2 rounded-2xl bg-destructive/15 px-3 py-2 text-destructive">
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-destructive" />
+                  <span className="font-mono text-sm font-semibold">
+                    {Math.floor(recSecs / 60)}:{(recSecs % 60).toString().padStart(2, "0")}
+                  </span>
+                  <span className="flex-1 text-xs">Recording encrypted audio...</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => stopRecording(true)}
+                    className="h-7 text-xs hover:bg-destructive/20"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => stopRecording(false)}
+                    className="h-7 gap-1 px-2.5 text-xs font-semibold"
+                  >
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                    <span>Done</span>
+                  </Button>
+                </div>
               ) : (
-                <Paperclip className="h-5 w-5 text-muted-foreground" />
-              )}
-            </Button>
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => cameraInputRef.current?.click()}
+                    disabled={uploading || sending}
+                    className="h-10 w-10 shrink-0 rounded-full"
+                    title="Take photo (with 3D annotations)"
+                  >
+                    <Camera className="h-5 w-5 text-muted-foreground" />
+                  </Button>
 
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleSend();
-                }
-              }}
-              placeholder="End-to-end encrypted message..."
-              rows={1}
-              maxLength={MESSAGE_MAX}
-              className={cn(
-                "flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/30",
-                isDark
-                  ? "bg-white/10 border-white/15 text-white placeholder:text-white/50 focus:border-white/30"
-                  : "bg-background/90 border-border/60 text-foreground placeholder:text-muted-foreground focus:border-primary/50 shadow-inner"
-              )}
-            />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading || sending}
+                    className="h-10 w-10 shrink-0 rounded-full"
+                    title="Attach file"
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    ) : (
+                      <Paperclip className="h-5 w-5 text-muted-foreground" />
+                    )}
+                  </Button>
 
-            <Button
-              onClick={handleSend}
-              disabled={sending || (!text.trim() && !attachment)}
-              className="h-10 w-10 shrink-0 rounded-full p-0 bg-gradient-to-tr from-primary to-primary/85 text-primary-foreground shadow-md shadow-primary/25 hover:shadow-primary/40 active:scale-95 transition-all"
-            >
-              {sending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <SendHorizontal className="h-4 w-4" />
+                  <textarea
+                    ref={textareaRef}
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder="End-to-end encrypted message..."
+                    rows={1}
+                    maxLength={MESSAGE_MAX}
+                    className={cn(
+                      "flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/30",
+                      isDark
+                        ? "bg-white/10 border-white/15 text-white placeholder:text-white/50 focus:border-white/30"
+                        : "bg-background/90 border-border/60 text-foreground placeholder:text-muted-foreground focus:border-primary/50 shadow-inner"
+                    )}
+                  />
+
+                  {!text.trim() && !staged && !editingMessage ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={startRecording}
+                      disabled={sending || uploading}
+                      className="h-10 w-10 shrink-0 rounded-full hover:text-primary"
+                      title="Hold to record voice"
+                    >
+                      <Mic className="h-5 w-5 text-muted-foreground" />
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      onClick={handleSend}
+                      disabled={sending || (!text.trim() && !staged)}
+                      className="h-10 w-10 shrink-0 rounded-full p-0 bg-gradient-to-tr from-primary to-primary/85 text-primary-foreground shadow-md shadow-primary/25 hover:shadow-primary/40 active:scale-95 transition-all"
+                    >
+                      {sending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <SendHorizontal className="h-4 w-4" />
+                      )}
+                    </Button>
+                  )}
+                </>
               )}
-            </Button>
-          </div>
+            </div>
           </div>
         )}
       </footer>
@@ -1125,6 +1316,28 @@ function GroupChatPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 3D Photo Editor Modal */}
+      {photoToEdit && (
+        <PhotoEditorModal
+          open={isPhotoEditorOpen}
+          file={photoToEdit}
+          onClose={() => {
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+          }}
+          onSave={(editedFile) => {
+            setStaged({ file: editedFile, kind: "image" });
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+          }}
+          onSkip={(origFile) => {
+            setStaged({ file: origFile, kind: "image" });
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+          }}
+        />
+      )}
     </div>
   );
 }
