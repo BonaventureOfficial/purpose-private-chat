@@ -1,4 +1,5 @@
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { supabase } from "@/integrations/supabase/client";
 import {
   ArrowLeft,
   Camera,
@@ -16,16 +17,6 @@ import {
   SendHorizontal,
   Trash2,
   X,
-  Users,
-  ShieldCheck,
-  ShieldAlert,
-  LogOut,
-  UserCheck,
-  UserX,
-  VolumeX,
-  Volume2,
-  Crown,
-  Settings,
   Bold,
   Italic,
   Strikethrough,
@@ -39,33 +30,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   MESSAGE_MAX,
   dateLabel,
-  deleteGroupMessage,
   deleteMessage,
   editMessage,
-  getGroupDetails,
-  leaveGroup,
+  getProfile,
   loadThread,
   markRead,
   myId,
-  sendGroupMessage,
-  setGroupOnlyAdminsCanSend,
-  setMemberCanSend,
-  setMemberRole,
-  kickGroupMember,
+  sendMessage,
   type Attachment,
-  type GroupDetails,
   type Message,
+  type PublicProfile,
 } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 import { uploadMedia, validateFile, type FileKind } from "@/lib/media";
@@ -79,18 +58,18 @@ import { PhotoEditorModal } from "@/components/purpose/PhotoEditorModal";
 import { useBackground } from "@/components/purpose/AppShell";
 import { isDarkBackground } from "@/lib/purpose";
 
-export const Route = createFileRoute("/_authenticated/group/$groupId")({
+export const Route = createFileRoute("/_authenticated/chat/$userId")({
   head: () => ({
     meta: [
-      { title: "Group Chat — Purpose" },
-      { name: "description", content: "End-to-end encrypted group messaging." },
-      { property: "og:title", content: "Group Chat — Purpose" },
-      { property: "og:description", content: "End-to-end encrypted group messaging." },
+      { title: "Chat — Purpose" },
+      { name: "description", content: "End-to-end encrypted private messaging." },
+      { property: "og:title", content: "Chat — Purpose" },
+      { property: "og:description", content: "End-to-end encrypted private messaging." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
   }),
-  component: GroupChatPage,
+  component: ChatPage,
 });
 
 function time(iso: string) {
@@ -191,33 +170,58 @@ function FormattedMessage({ text, isMine }: { text: string; isMine?: boolean }) 
   );
 }
 
-function DecryptedMedia({
+function Ticks({ sending, read }: { sending: boolean; read: boolean }) {
+  if (sending) return <Check className="h-3.5 w-3.5 text-destructive" aria-label="Sending" />;
+  const color = read ? "text-online" : "text-primary-foreground";
+  return (
+    <span className="inline-flex items-center" aria-label={read ? "Read" : "Delivered"}>
+      <Check className={cn("h-3.5 w-3.5", color)} />
+      <Check className={cn("-ml-2.5 h-3.5 w-3.5", color)} />
+    </span>
+  );
+}
+
+function DecryptedAttachment({
   url,
   type,
   name,
-  attKey,
-  attIv,
-  isDark,
+  encKey,
+  iv,
+  mine,
 }: {
   url: string;
   type: "image" | "video" | "pdf" | "audio";
-  name: string;
-  attKey?: string | null;
-  attIv?: string | null;
-  isDark: boolean;
+  name: string | null;
+  encKey?: string | null;
+  iv?: string | null;
+  mine: boolean;
 }) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(() => getCachedDecryptedMedia(url));
-  const [loading, setLoading] = useState(!blobUrl);
-  const [error, setError] = useState(false);
+  const [blobUrl, setBlobUrl] = useState<string | null>(() => {
+    if (!encKey || !iv) return url;
+    return getCachedDecryptedMedia(url) ?? null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (!encKey || !iv) return false;
+    return !getCachedDecryptedMedia(url);
+  });
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (blobUrl || !attKey || !attIv) {
+    if (!encKey || !iv) {
+      setBlobUrl(url);
       setLoading(false);
       return;
     }
-    let cancelled = false;
+    const cached = getCachedDecryptedMedia(url);
+    if (cached) {
+      setBlobUrl(cached);
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
     setLoading(true);
-    setError(false);
+    setError(null);
 
     const mime =
       type === "image"
@@ -228,112 +232,92 @@ function DecryptedMedia({
         ? "audio/webm"
         : "application/pdf";
 
-    downloadAndDecryptMedia(url, attKey, attIv, mime)
-      .then((decryptedBlobUrl) => {
-        if (!cancelled) {
-          cacheDecryptedMedia(url, decryptedBlobUrl);
-          setBlobUrl(decryptedBlobUrl);
+    downloadAndDecryptMedia(url, encKey, iv, mime)
+      .then((decryptedUrl) => {
+        if (active) {
+          setBlobUrl(decryptedUrl);
           setLoading(false);
         }
       })
       .catch((err) => {
-        console.error("Failed to decrypt group media:", err);
-        if (!cancelled) {
-          setError(true);
+        if (active) {
+          console.error("Failed to decrypt attachment:", err);
+          setError("Failed to decrypt media");
           setLoading(false);
         }
       });
 
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [url, attKey, attIv, type, blobUrl]);
+  }, [url, encKey, iv, type]);
 
   if (loading) {
     return (
-      <div className="flex h-36 w-48 items-center justify-center rounded-xl bg-black/10 dark:bg-white/10">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="flex h-24 w-40 items-center justify-center rounded-xl bg-black/10">
+        <Loader2 className="h-5 w-5 animate-spin opacity-60" />
       </div>
     );
   }
 
-  if (error) {
+  if (error || !blobUrl) {
     return (
-      <div className="flex items-center gap-2 rounded-xl p-3 text-xs bg-destructive/10 text-destructive">
-        <span>Failed to decrypt attachment.</span>
+      <div className="flex items-center gap-2 rounded-xl bg-destructive/15 px-3 py-2 text-xs text-destructive">
+        <Lock className="h-4 w-4" />
+        <span>{error ?? "Encrypted media unavailable"}</span>
       </div>
     );
-  }
-
-  const effectiveUrl = blobUrl || url;
-
-  if (type === "image") {
-    return (
-      <img
-        src={effectiveUrl}
-        alt={name}
-        className="max-h-72 max-w-full rounded-xl object-contain shadow-sm"
-        loading="lazy"
-      />
-    );
-  }
-
-  if (type === "video") {
-    return (
-      <video src={effectiveUrl} controls className="max-h-72 max-w-full rounded-xl shadow-sm" />
-    );
-  }
-
-  if (type === "audio") {
-    return <audio src={effectiveUrl} controls className="w-full max-w-xs" />;
   }
 
   return (
-    <a
-      href={effectiveUrl}
-      download={name}
-      className={cn(
-        "flex items-center gap-3 rounded-xl p-3 text-xs transition-opacity hover:opacity-90",
-        isDark ? "bg-white/10 text-white" : "bg-black/10 text-foreground"
+    <span className="mb-1 block">
+      {type === "image" && (
+        <a href={blobUrl} target="_blank" rel="noreferrer">
+          <img
+            src={blobUrl}
+            alt={name ?? "Image"}
+            className="max-h-72 rounded-xl object-cover"
+            loading="lazy"
+          />
+        </a>
       )}
-    >
-      <FileText className="h-6 w-6 shrink-0 text-primary" />
-      <span className="truncate font-medium">{name}</span>
-    </a>
+      {type === "video" && (
+        <video src={blobUrl} controls preload="metadata" className="max-h-72 rounded-xl" />
+      )}
+      {type === "audio" && (
+        <audio src={blobUrl} controls preload="metadata" className="w-64 max-w-full" />
+      )}
+      {type === "pdf" && (
+        <a
+          href={blobUrl}
+          target="_blank"
+          download={name ?? "Document.pdf"}
+          rel="noreferrer"
+          className={cn(
+            "flex items-center gap-2 rounded-xl px-3 py-2",
+            mine ? "bg-primary-foreground/10" : "bg-secondary"
+          )}
+        >
+          <FileText className="h-6 w-6 shrink-0" />
+          <span className="truncate text-sm font-medium">{name ?? "Document.pdf"}</span>
+        </a>
+      )}
+    </span>
   );
 }
 
-function GroupChatPage() {
-  const { groupId } = Route.useParams();
+function ChatPage() {
+  const { userId } = Route.useParams();
   const [bg] = useBackground();
-  const isDark = isDarkBackground(bg);
-  const navigate = useNavigate();
-
-  const [me, setMe] = useState<string | null>(null);
-  const [group, setGroup] = useState<GroupDetails | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const darkWall = isDarkBackground(bg);
+  const [partner, setPartner] = useState<PublicProfile | null>(null);
+  const [msgs, setMsgs] = useState<Message[]>([]);
+  const [pending, setPending] = useState<Message[]>([]);
   const [text, setText] = useState("");
-  const applyFormat = (wrapper: string) => {
-    const el = textareaRef.current;
-    if (!el) {
-      setText((t) => `${t}${wrapper}${wrapper}`);
-      return;
-    }
-    const start = el.selectionStart ?? 0;
-    const end = el.selectionEnd ?? 0;
-    const selected = text.slice(start, end);
-    const replacement = selected ? `${wrapper}${selected}${wrapper}` : `${wrapper}${wrapper}`;
-    const nextText = text.slice(0, start) + replacement + text.slice(end);
-    setText(nextText);
-    setTimeout(() => {
-      el.focus();
-      const cursor = selected ? start + replacement.length : start + wrapper.length;
-      el.setSelectionRange(cursor, cursor);
-    }, 0);
-  };
-
+  const [me, setMe] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const [staged, setStaged] = useState<{ file: File; kind: FileKind } | null>(null);
   const [photoToEdit, setPhotoToEdit] = useState<File | null>(null);
   const [isPhotoEditorOpen, setIsPhotoEditorOpen] = useState(false);
@@ -350,56 +334,111 @@ function GroupChatPage() {
       if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
     };
   }, [stagedPreviewUrl]);
-
   const [replyTo, setReplyTo] = useState<Message | null>(null);
-  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
-  const [infoOpen, setInfoOpen] = useState(false);
-  const [updatingSettings, setUpdatingSettings] = useState(false);
-
-  // Voice recording state
+  const [editing, setEditing] = useState<Message | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const localTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isCurrentlyTypingRef = useRef(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const recRef = useRef<MediaRecorder | null>(null);
   const cancelRecRef = useRef(false);
 
-  const endRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const loadData = async () => {
-    const myUserId = await myId();
-    if (!myUserId) {
-      void navigate({ to: "/login" as any });
-      return;
-    }
-    setMe(myUserId);
-
-    const details = await getGroupDetails(groupId);
-    setGroup(details);
-
-    const msgs = (await loadThread(myUserId, groupId)).filter((m) => !m.deleted_at);
-    setMessages(msgs);
-    void markRead(myUserId, groupId);
-  };
+  useEffect(() => {
+    void myId().then(setMe);
+    void getProfile(userId).then(setPartner);
+  }, [userId]);
 
   useEffect(() => {
-    void loadData();
-    const onChange = () => {
-      void loadData();
-    };
-    window.addEventListener("purpose-vault-change", onChange);
-    window.addEventListener("focus", onChange);
+    if (!me || !userId) return;
+
+    const pairId = [me, userId].sort().join(":");
+    const channel = supabase.channel(`presence-${pairId}`, {
+      config: { broadcast: { self: false } },
+    });
+
+    typingChannelRef.current = channel;
+
+    channel
+      .on("broadcast", { event: "typing" }, ({ payload }) => {
+        if (payload?.userId === userId) {
+          setIsPartnerTyping(Boolean(payload.isTyping));
+          if (payload.isTyping) {
+            if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+            typingTimerRef.current = setTimeout(() => {
+              setIsPartnerTyping(false);
+            }, 4000);
+          }
+        }
+      })
+      .subscribe();
+
     return () => {
-      window.removeEventListener("purpose-vault-change", onChange);
-      window.removeEventListener("focus", onChange);
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+      void supabase.removeChannel(channel);
+      typingChannelRef.current = null;
     };
-  }, [groupId]);
+  }, [me, userId]);
+
+  function broadcastTyping(isTyping: boolean) {
+    if (!typingChannelRef.current || !me) return;
+    if (isCurrentlyTypingRef.current === isTyping) return;
+    isCurrentlyTypingRef.current = isTyping;
+    try {
+      void typingChannelRef.current.send({
+        type: "broadcast",
+        event: "typing",
+        payload: { userId: me, isTyping },
+      });
+    } catch (err) {
+      console.warn("Failed to broadcast typing:", err);
+    }
+  }
+
+  function handleTextChange(val: string) {
+    setText(val);
+    if (!me || !userId) return;
+
+    if (val.trim().length > 0) {
+      broadcastTyping(true);
+      if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+      localTypingTimeoutRef.current = setTimeout(() => {
+        broadcastTyping(false);
+      }, 2500);
+    } else {
+      broadcastTyping(false);
+      if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+    }
+  }
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+    if (!me) return;
+    const load = () => {
+      void loadThread(me, userId).then((list) => {
+        setMsgs(list.filter((m) => !m.deleted_at));
+        setPending((prev) => prev.filter((p) => !list.some((real) => real.id === p.id)));
+      });
+    };
+    load();
+    window.addEventListener("purpose-vault-change", load);
+    return () => window.removeEventListener("purpose-vault-change", load);
+  }, [me, userId]);
 
+  useEffect(() => {
+    if (me) void markRead(me, userId);
+  }, [me, userId, msgs.length]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs.length, pending.length]);
 
   useEffect(() => {
     if (!recording) return;
@@ -457,22 +496,33 @@ function GroupChatPage() {
     }
     setRecording(false);
   }
-  const handleSend = async () => {
-    if ((!text.trim() && !staged) || sending) return;
 
-    if (editingMessage) {
-      try {
-        await editMessage(editingMessage.id, text.trim());
-        setEditingMessage(null);
-        setText("");
-        void loadData();
-      } catch (err: any) {
-        toast.error(err?.message || "Failed to edit message");
-      }
+  function applyFormat(wrapper: string) {
+    const el = taRef.current;
+    if (!el) {
+      setText((t) => `${t}${wrapper}${wrapper}`);
       return;
     }
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    const selected = text.slice(start, end);
+    const replacement = selected ? `${wrapper}${selected}${wrapper}` : `${wrapper}${wrapper}`;
+    const nextText = text.slice(0, start) + replacement + text.slice(end);
+    setText(nextText);
+    setTimeout(() => {
+      el.focus();
+      const cursor = selected ? start + replacement.length : start + wrapper.length;
+      el.setSelectionRange(cursor, cursor);
+    }, 0);
+  }
 
+  async function send() {
+    if ((!text.trim() && !staged) || sending || !me) return;
     setSending(true);
+    setErr(null);
+    broadcastTyping(false);
+    if (localTypingTimeoutRef.current) clearTimeout(localTypingTimeoutRef.current);
+
     let att: Attachment | null = null;
     if (staged) {
       setUploading(true);
@@ -487,124 +537,94 @@ function GroupChatPage() {
           iv,
         };
         cacheDecryptedMedia(up, URL.createObjectURL(staged.file));
-      } catch (e: any) {
+      } catch (e) {
         setUploading(false);
         setSending(false);
-        toast.error(e?.message || "Failed to upload encrypted file");
+        setErr(e instanceof Error ? e.message : "Upload failed");
         return;
       }
       setUploading(false);
     }
 
+    const currentText = text.trim();
+    const tempId = `pending-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      sender_id: me,
+      recipient_id: userId,
+      body: currentText,
+      reply_to_id: replyTo?.id ?? null,
+      attachment_url: att?.url ?? null,
+      attachment_type: att?.type ?? null,
+      attachment_name: att?.name ?? null,
+      attachment_key: att?.key ?? null,
+      attachment_iv: att?.iv ?? null,
+      created_at: new Date().toISOString(),
+      read_at: null,
+      edited_at: null,
+      deleted_at: null,
+      recipient_hidden: false,
+    };
+
+    setPending((p) => [...p, optimistic]);
+    setText("");
+    setStaged(null);
+    const activeReply = replyTo;
+    setReplyTo(null);
+
     try {
-      await sendGroupMessage(groupId, text.trim(), replyTo?.id ?? null, att);
-      setText("");
-      setStaged(null);
-      setReplyTo(null);
-      void loadData();
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to send message");
+      const real = await sendMessage(me, userId, currentText, activeReply?.id ?? null, att);
+      setPending((p) => p.filter((x) => x.id !== tempId));
+      setMsgs((m) => (m.some((x) => x.id === real.id) ? m : [...m, real]));
+    } catch (e) {
+      setPending((p) => p.filter((x) => x.id !== tempId));
+      setText(currentText);
+      setErr(e instanceof Error ? e.message : "Failed to send");
     } finally {
       setSending(false);
     }
-  };
+  }
 
-  const handleDeleteMessage = async (msg: Message) => {
+  async function onSaveEdit() {
+    if (!editing || !text.trim()) return;
+    const newBody = text.trim();
+    try {
+      const updated = await editMessage(editing.id, newBody);
+      setMsgs((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      setEditing(null);
+      setText("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not edit.");
+    }
+  }
+
+  async function onDelete(m: Message) {
     if (!me) return;
     try {
-      if (msg.sender_id === me || isAdminOrOwner) {
-        await deleteGroupMessage(groupId, msg);
-      } else {
-        await deleteMessage(msg, me);
-      }
-      // Immediately remove from UI completely: no placeholder, zero residue
-      setMessages((prev) => prev.filter((x) => x.id !== msg.id));
-      if (editingMessage?.id === msg.id) {
-        setEditingMessage(null);
+      await deleteMessage(m, me);
+      // Remove completely from view and pending: no residue, no "Message deleted" placeholder
+      setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+      setPending((prev) => prev.filter((x) => x.id !== m.id));
+      if (editing?.id === m.id) {
+        setEditing(null);
         setText("");
       }
-      void loadData();
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to delete message");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not delete.");
     }
-  };
+  }
 
-  const handleLeaveGroup = async () => {
-    if (!confirm("Are you sure you want to leave this group?")) return;
-    try {
-      await leaveGroup(groupId);
-      toast.success("You left the group");
-      void navigate({ to: "/home" });
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to leave group");
-    }
-  };
-
-  // Superpower handlers
-  const handleToggleOnlyAdminsCanSend = async () => {
-    if (!group || !group.isOwner) return;
-    setUpdatingSettings(true);
-    try {
-      const nextVal = !group.only_admins_can_send;
-      await setGroupOnlyAdminsCanSend(groupId, nextVal);
-      toast.success(nextVal ? "Group restricted to admins only" : "All members can send messages");
-      void loadData();
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to update group setting");
-    } finally {
-      setUpdatingSettings(false);
-    }
-  };
-
-  const handleToggleMemberRole = async (userId: string, currentRole: "admin" | "member") => {
-    const newRole = currentRole === "admin" ? "member" : "admin";
-    try {
-      await setMemberRole(groupId, userId, newRole);
-      toast.success(newRole === "admin" ? "Member promoted to Admin" : "Admin demoted to Member");
-      void loadData();
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to change member role");
-    }
-  };
-
-  const handleToggleMemberCanSend = async (userId: string, currentCanSend: boolean) => {
-    const nextVal = !currentCanSend;
-    try {
-      await setMemberCanSend(groupId, userId, nextVal);
-      toast.success(nextVal ? "Member can now send messages" : "Member restricted from sending messages");
-      void loadData();
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to update member permission");
-    }
-  };
-
-  const handleKickMember = async (userId: string, username: string) => {
-    if (!confirm(`Remove ${username} from the group?`)) return;
-    try {
-      await kickGroupMember(groupId, userId);
-      toast.success(`${username} removed from the group`);
-      void loadData();
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to remove member");
-    }
-  };
-
-  const getSenderName = (senderId: string) => {
-    if (senderId === me) return "You";
-    const member = group?.members.find((m) => m.user_id === senderId);
-    return member?.profile.username || "Member";
-  };
-
-  const getSenderProfile = (senderId: string) => {
-    return group?.members.find((m) => m.user_id === senderId)?.profile;
-  };
-
-  const isOwner = Boolean(group?.isOwner);
-  const isAdminOrOwner = isOwner || group?.myRole === "admin";
-  const canSend = Boolean(group?.canSend);
+  const name = partner?.username ?? "Chat";
+  const display = [...msgs, ...pending].filter((m) => !m.deleted_at);
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden" style={{ backgroundColor: bg }}>
+    <div
+      className={cn(
+        "relative flex h-[100dvh] flex-col overflow-hidden text-foreground",
+        darkWall && "dark text-foreground"
+      )}
+      style={{ backgroundColor: bg }}
+    >
       {/* Mathematical Guilloche Security Watermark */}
       <div
         aria-hidden="true"
@@ -624,701 +644,532 @@ function GroupChatPage() {
           <circle cx="400" cy="400" r="140" strokeDasharray="4 4" />
           <circle cx="400" cy="400" r="80" />
           {Array.from({ length: 24 }).map((_, i) => (
-            <ellipse key={`outer-${i}`} cx="400" cy="400" rx="340" ry="120" transform={`rotate(${i * 15} 400 400)`} />
+            <ellipse
+              key={`outer-${i}`}
+              cx="400"
+              cy="400"
+              rx="340"
+              ry="120"
+              transform={`rotate(${i * 15} 400 400)`}
+            />
           ))}
           {Array.from({ length: 36 }).map((_, i) => (
-            <ellipse key={`inner-${i}`} cx="400" cy="400" rx="220" ry="70" transform={`rotate(${i * 10} 400 400)`} />
+            <ellipse
+              key={`inner-${i}`}
+              cx="400"
+              cy="400"
+              rx="220"
+              ry="70"
+              transform={`rotate(${i * 10} 400 400)`}
+            />
           ))}
           {Array.from({ length: 18 }).map((_, i) => (
-            <ellipse key={`core-${i}`} cx="400" cy="400" rx="140" ry="40" transform={`rotate(${i * 20} 400 400)`} />
+            <ellipse
+              key={`core-${i}`}
+              cx="400"
+              cy="400"
+              rx="140"
+              ry="40"
+              transform={`rotate(${i * 20} 400 400)`}
+            />
           ))}
           {Array.from({ length: 17 }).map((_, i) => {
             const y = 80 + i * 40;
-            return <path key={`wave-${i}`} d={`M 0,${y} Q 200,${y + 14} 400,${y} T 800,${y}`} strokeDasharray="6 4" strokeWidth="0.6" />;
+            return (
+              <path
+                key={`wave-${i}`}
+                d={`M 0,${y} Q 200,${y + 14} 400,${y} T 800,${y}`}
+                strokeDasharray="6 4"
+                strokeWidth="0.6"
+              />
+            );
           })}
         </svg>
       </div>
-      {/* Group Header */}
+
       <header
-        className={cn("relative z-10",
-          "sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 backdrop-blur-xl shadow-xs transition-colors",
-          isDark ? "border-white/10 bg-black/55 text-white" : "border-border/50 bg-background/80 text-foreground"
+        className={cn(
+          "relative z-10 sticky top-0 z-20 flex items-center justify-between border-b px-4 py-3 backdrop-blur-xl shadow-xs transition-colors",
+          darkWall ? "border-white/10 bg-black/55 text-white" : "border-border/50 bg-background/80 text-foreground"
         )}
       >
         <div className="flex items-center gap-3">
           <Link
             to="/home"
-            className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-foreground/10 transition-colors"
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-full transition",
+              darkWall ? "hover:bg-white/10" : "hover:bg-muted"
+            )}
+            aria-label="Back to chats"
           >
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <div
-            onClick={() => setInfoOpen(true)}
-            className="flex items-center gap-3 cursor-pointer select-none"
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20 text-primary font-bold">
-              {group?.avatar_url ? (
-                <img
-                  src={group.avatar_url}
-                  alt={group.name}
-                  className="h-full w-full rounded-full object-cover"
-                />
-              ) : (
-                <Users className="h-5 w-5" />
-              )}
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h2 className="text-sm font-bold leading-tight">{group?.name || "Group"}</h2>
-                {isOwner && <Crown className="h-3.5 w-3.5 text-amber-500" title="You are the Owner" />}
+          <div className="flex items-center gap-2.5">
+            {partner?.avatar_url ? (
+              <img src={partner.avatar_url} alt={name} className="h-9 w-9 rounded-full object-cover ring-1.5 ring-primary/30 shadow-xs" />
+            ) : (
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary font-bold text-primary-foreground text-sm ring-1.5 ring-primary/30 shadow-xs">
+                {name.slice(0, 1).toUpperCase()}
               </div>
-              <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Lock className="h-3 w-3 text-emerald-500" />
-                <span>{group?.members.length ?? 0} members • End-to-end encrypted</span>
-              </p>
+            )}
+            <div>
+              <p className="font-semibold text-sm leading-tight">{name}</p>
+              {isPartnerTyping ? (
+                <p className="flex items-center gap-1.5 text-[11px] font-medium text-online animate-pulse">
+                  <span className="flex space-x-0.5">
+                    <span className="h-1 w-1 rounded-full bg-online animate-bounce [animation-delay:-0.3s]" />
+                    <span className="h-1 w-1 rounded-full bg-online animate-bounce [animation-delay:-0.15s]" />
+                    <span className="h-1 w-1 rounded-full bg-online animate-bounce" />
+                  </span>
+                  typing...
+                </p>
+              ) : (
+                <p className="flex items-center gap-1 text-[11px] opacity-75">
+                  <Lock className="h-3 w-3 text-online" /> End-to-end encrypted
+                </p>
+              )}
             </div>
           </div>
         </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="rounded-full">
-              <MoreVertical className="h-5 w-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52 rounded-2xl">
-            <DropdownMenuItem onClick={() => setInfoOpen(true)} className="cursor-pointer">
-              <Users className="mr-2 h-4 w-4" /> Group Info & Powers
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLeaveGroup} className="text-destructive cursor-pointer">
-              <LogOut className="mr-2 h-4 w-4" /> Leave Group
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </header>
 
-      {/* Messages Scroll Area */}
-      <main className="relative z-10 flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {messages.filter((m) => !m.deleted_at).map((m, idx) => {
-          const isMine = m.sender_id === me;
-          const senderName = getSenderName(m.sender_id);
-          const senderProfile = getSenderProfile(m.sender_id);
-          const prevMsg = messages[idx - 1];
-          const showDate = !prevMsg || dateLabel(prevMsg.created_at) !== dateLabel(m.created_at);
-          const canDeleteThisMessage = isMine || isAdminOrOwner;
+      <main className="relative z-10 flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {display.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground text-sm">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <Lock className="h-6 w-6" />
+            </div>
+            <p className="font-medium text-foreground">No messages yet</p>
+            <p className="text-xs">Messages and attachments are end-to-end encrypted before leaving this device.</p>
+          </div>
+        ) : (
+          display.map((m, i) => {
+            const mine = m.sender_id === me;
+            const isPending = m.id.startsWith("pending-");
+            const awaitingDelivery = isPending || m.local_status === "queued" || m.local_status === "sent";
+            const prev = display[i - 1];
+            const showDate = !prev || dateLabel(prev.created_at) !== dateLabel(m.created_at);
 
-          return (
-            <div key={m.id} className="space-y-2">
-              {showDate && (
-                <div className="flex justify-center my-3">
-                  <span
-                    className={cn(
-                      "rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-wider backdrop-blur-md border shadow-xs",
-                      isDark ? "border-white/10 bg-black/40 text-white/90" : "border-border/50 bg-background/80 text-muted-foreground"
-                    )}
-                  >
-                    {dateLabel(m.created_at)}
-                  </span>
-                </div>
-              )}
-
-              <div className={cn("flex gap-2 max-w-full", isMine ? "justify-end" : "justify-start")}>
-                {!isMine && (
-                  <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0 self-end mb-1 overflow-hidden ring-1 ring-border shadow-xs">
-                    {senderProfile?.avatar_url ? (
-                      <img
-                        src={senderProfile.avatar_url}
-                        alt={senderName}
-                        className="h-full w-full rounded-full object-cover"
-                      />
-                    ) : (
-                      senderName[0]?.toUpperCase()
-                    )}
+            return (
+              <Fragment key={m.id}>
+                {showDate && (
+                  <div className="my-3 flex justify-center">
+                    <span
+                      className={cn(
+                        "rounded-full px-3 py-1 font-medium text-[11px] shadow-xs backdrop-blur-md border uppercase tracking-wider",
+                        darkWall ? "border-white/10 bg-black/40 text-white/90" : "border-border/50 bg-background/80 text-muted-foreground"
+                      )}
+                    >
+                      {dateLabel(m.created_at)}
+                    </span>
                   </div>
                 )}
-                <div className={cn("flex flex-col", isMine ? "items-end" : "items-start")}>
-                  {!isMine && (
-                    <span className="ml-1 mb-1 text-[11px] font-semibold text-primary">
-                      {senderName}
-                    </span>
+                <div className={cn("group flex items-end gap-1.5", mine ? "justify-end" : "justify-start")}>
+                  {!mine && (
+                    <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0 self-end mb-1 overflow-hidden ring-1 ring-border shadow-xs">
+                      {partner?.avatar_url ? (
+                        <img
+                          src={partner.avatar_url}
+                          alt={name}
+                          className="h-full w-full rounded-full object-cover"
+                        />
+                      ) : (
+                        name.slice(0, 1).toUpperCase()
+                      )}
+                    </div>
                   )}
-
-                <div className={cn("flex items-center gap-1.5 max-w-full", isMine ? "flex-row-reverse" : "flex-row")}>
                   <div
                     className={cn(
-                      "relative max-w-[82%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-sm md:max-w-[65%] break-words transition-all",
-                      isMine
+                      "relative max-w-[80%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-sm break-words transition-all",
+                      mine
                         ? "rounded-br-xs bg-gradient-to-br from-primary via-primary to-primary/90 text-primary-foreground shadow-md shadow-primary/20 border border-primary-foreground/15"
                         : "rounded-tl-xs bg-card/90 backdrop-blur-md text-card-foreground border border-border/60 shadow-xs dark:bg-zinc-900/85 dark:border-white/10"
                     )}
                   >
-                    {m.reply_to_id && (
-                      <div
-                        className={cn(
-                          "mb-2 rounded-xl border-l-3 px-3 py-1.5 text-xs backdrop-blur-xs",
-                          isMine
-                            ? "border-primary-foreground/75 bg-black/20 text-primary-foreground"
-                            : "border-primary bg-primary/10 text-card-foreground"
-                        )}
-                      >
-                        <span className="font-semibold text-[11px]">In reply to previous message</span>
-                      </div>
+                    {m.reply_to_id && (() => {
+                      const parent = display.find((x) => x.id === m.reply_to_id);
+                      return (
+                        <div
+                          className={cn(
+                            "mb-2 rounded-xl border-l-3 px-3 py-1.5 text-xs backdrop-blur-xs",
+                            mine
+                              ? "border-primary-foreground/75 bg-black/20 text-primary-foreground"
+                              : "border-primary bg-primary/10 text-card-foreground"
+                          )}
+                        >
+                          <p className="font-semibold text-[11px]">
+                            {parent?.sender_id === me ? "You" : partner?.username ?? "Partner"}
+                          </p>
+                          <p className="truncate opacity-80">{parent ? parent.body || "Attachment" : "Replying to message"}</p>
+                        </div>
+                      );
+                    })()}
+
+                    {m.attachment_url && (
+                      <DecryptedAttachment
+                        url={m.attachment_url}
+                        type={m.attachment_type ?? "image"}
+                        name={m.attachment_name}
+                        encKey={m.attachment_key}
+                        iv={m.attachment_iv}
+                        mine={mine}
+                      />
                     )}
 
-                    {m.attachment_url && m.attachment_type && (
-                      <div className="mb-2">
-                        <DecryptedMedia
-                          url={m.attachment_url}
-                          type={m.attachment_type}
-                          name={m.attachment_name || "Attachment"}
-                          attKey={m.attachment_key}
-                          attIv={m.attachment_iv}
-                          isDark={isDark}
-                        />
-                      </div>
-                    )}
-
-                    <FormattedMessage text={m.body} isMine={isMine} />
-
-                    <div
+                    <FormattedMessage text={m.body} isMine={mine} />
+                    {m.edited_at && <span className="ml-1 text-[10px] opacity-70">(edited)</span>}
+                    <span
                       className={cn(
-                        "mt-1 flex items-center justify-end gap-1 text-[10px]",
-                        isMine ? "text-primary-foreground/75" : "text-muted-foreground"
+                        "ml-2 inline-flex translate-y-0.5 items-center gap-1 text-[10.5px] font-medium",
+                        mine ? "text-primary-foreground/75" : "text-muted-foreground"
                       )}
                     >
-                      <span>{time(m.created_at)}</span>
-                      {m.edited_at && <span>(edited)</span>}
-                      {isMine && <Check className="h-3 w-3" />}
-                    </div>
+                      {time(m.created_at)}
+                      {mine && <Ticks sending={awaitingDelivery} read={!isPending && !!m.read_at} />}
+                    </span>
                   </div>
 
                   <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
+                        <button
+                          type="button"
                           className={cn(
-                            "h-7 w-7 rounded-full p-1 opacity-70 hover:opacity-100 focus:opacity-100 transition-opacity shrink-0",
-                            isDark ? "text-white/70 hover:bg-white/10" : "text-muted-foreground hover:bg-muted"
+                            "p-1.5 rounded-full shrink-0 self-center transition-opacity opacity-70 hover:opacity-100 focus:opacity-100",
+                            darkWall ? "text-white/70 hover:bg-white/10" : "text-muted-foreground hover:bg-muted"
                           )}
                           aria-label="Message options"
                         >
                           <MoreVertical className="h-4 w-4" />
-                        </Button>
+                        </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align={isMine ? "end" : "start"} className="w-36 rounded-xl text-xs">
+                      <DropdownMenuContent align={mine ? "end" : "start"} className="w-36">
                         <DropdownMenuItem
-                          onClick={() => {
+                          onSelect={() => {
                             void navigator.clipboard.writeText(m.body);
                             toast.success("Copied to clipboard");
                           }}
                         >
-                          <Copy className="mr-2 h-3.5 w-3.5" /> Copy
+                          <Copy className="h-4 w-4" /> Copy
                         </DropdownMenuItem>
-                        {isMine && (
+                        {mine && (
                           <DropdownMenuItem
-                            onClick={() => {
-                              setEditingMessage(m);
+                            onSelect={() => {
+                              setEditing(m);
                               setText(m.body);
-                              textareaRef.current?.focus();
+                              taRef.current?.focus();
                             }}
                           >
-                            <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                            <Pencil className="h-4 w-4" /> Edit
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuItem
-                          onClick={() => {
+                          onSelect={() => {
                             setReplyTo(m);
-                            textareaRef.current?.focus();
+                            taRef.current?.focus();
                           }}
                         >
-                          <CornerUpLeft className="mr-2 h-3.5 w-3.5" /> Reply
+                          <CornerUpLeft className="h-4 w-4" /> Reply
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
-                          onClick={() => void handleDeleteMessage(m)}
                           className="text-destructive focus:text-destructive"
+                          onSelect={() => void onDelete(m)}
                         >
-                          <Trash2 className="mr-2 h-3.5 w-3.5" />
-                          {isMine ? "Delete" : isAdminOrOwner ? "Delete (Admin)" : "Delete"}
+                          <Trash2 className="h-4 w-4" /> Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                 </div>
-              </div>
-              </div>
+              </Fragment>
+            );
+          })
+        )}
+        {isPartnerTyping && (
+          <div className="flex items-center gap-2 py-1 px-1 text-xs animate-fade-in">
+            <div className="flex items-center gap-2 rounded-2xl bg-secondary/80 backdrop-blur-md px-3.5 py-2 border border-border/40 shadow-xs">
+              <span className="flex space-x-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce" />
+              </span>
+              <span className="text-[11.5px] font-medium text-muted-foreground">
+                {name} is typing...
+              </span>
             </div>
-          );
-        })}
-        <div ref={endRef} />
+          </div>
+        )}
+        <div ref={bottomRef} />
       </main>
 
-      {/* Reply or Editing or Staged Attachment Banner */}
-      {(replyTo || editingMessage || staged) && (
-        <div
-          className={cn(
-            "flex items-center justify-between gap-3 px-4 py-2 text-xs border-t",
-            isDark ? "bg-neutral-900 border-white/10 text-white" : "bg-neutral-50 border-black/5"
-          )}
-        >
-          {staged ? (
-            <div className="flex items-center gap-3 overflow-hidden">
-              {staged.kind === "image" ? (
-                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg border bg-black/10">
-                  <img
-                    src={stagedPreviewUrl || undefined}
-                    alt="Preview"
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              ) : (
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <FileText className="h-5 w-5" />
-                </div>
-              )}
-              <div className="flex flex-col truncate">
-                <span className="truncate font-medium">{staged.file.name}</span>
-                <span className="text-[11px] text-muted-foreground capitalize">
-                  {staged.kind} • {(staged.file.size / 1024).toFixed(0)} KB
-                </span>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 truncate">
-              {replyTo && (
-                <>
-                  <CornerUpLeft className="h-3.5 w-3.5 text-primary shrink-0" />
-                  <span className="truncate">
-                    Replying to <strong>{getSenderName(replyTo.sender_id)}</strong>: {replyTo.body}
-                  </span>
-                </>
-              )}
-              {editingMessage && (
-                <>
-                  <Pencil className="h-3.5 w-3.5 text-primary shrink-0" />
-                  <span>Editing message</span>
-                </>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center gap-1 shrink-0">
-            {staged?.kind === "image" && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setPhotoToEdit(staged.file);
-                  setIsPhotoEditorOpen(true);
-                }}
-                className="h-8 gap-1.5 px-2.5 text-xs text-primary hover:text-primary"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-                <span>Edit 3D</span>
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                if (staged) setStaged(null);
-                if (replyTo) setReplyTo(null);
-                if (editingMessage) {
-                  setEditingMessage(null);
-                  setText("");
-                }
-              }}
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Input Footer or Restricted Banner */}
       <footer
         className={cn(
           "relative z-10 sticky bottom-0 z-20 border-t p-3 backdrop-blur-xl shadow-lg transition-colors",
-          isDark ? "border-white/10 bg-black/60" : "border-border/50 bg-background/80"
+          darkWall ? "border-white/10 bg-black/60" : "border-border/50 bg-background/80"
         )}
       >
-        {!canSend ? (
-          <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
-            <VolumeX className="h-4 w-4 text-destructive" />
-            <span>
-              {group?.only_admins_can_send && !isAdminOrOwner
-                ? "Only administrators are permitted to send messages in this group."
-                : "You have been restricted from sending messages in this group by an administrator."}
-            </span>
-          </div>
-        ) : (
-          <div className="space-y-1.5 max-w-4xl mx-auto">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => applyFormat("*")}
-                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
-                title="Bold (*text*)"
-              >
-                <Bold className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat("_")}
-                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
-                title="Italic (_text_)"
-              >
-                <Italic className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat("~")}
-                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
-                title="Strikethrough (~text~)"
-              >
-                <Strikethrough className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => applyFormat("`")}
-                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
-                title="Code (`code`)"
-              >
-                <CodeIcon className="h-3.5 w-3.5" />
-              </button>
+        {replyTo && (
+          <div className="mb-2 flex items-center justify-between rounded-lg bg-secondary/80 px-3 py-1.5 text-xs text-secondary-foreground">
+            <div className="truncate">
+              <span className="font-semibold">{replyTo.sender_id === me ? "Replying to yourself" : `Replying to ${name}`}: </span>
+              <span className="opacity-80">{replyTo.body || "Attachment"}</span>
             </div>
-            <div className="flex items-end gap-2">
-              <input
-                type="file"
-                ref={cameraInputRef}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void stageFile(f);
-                  e.target.value = "";
-                }}
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-              />
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void stageFile(f);
-                  e.target.value = "";
-                }}
-                accept="image/*,video/*,audio/*,application/pdf"
-                className="hidden"
-              />
+            <button onClick={() => setReplyTo(null)} className="p-1 hover:opacity-70" aria-label="Cancel reply">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
-              {recording ? (
-                <div className="flex flex-1 items-center gap-2 rounded-2xl bg-destructive/15 px-3 py-2 text-destructive">
-                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-destructive" />
-                  <span className="font-mono text-sm font-semibold">
-                    {Math.floor(recSecs / 60)}:{(recSecs % 60).toString().padStart(2, "0")}
-                  </span>
-                  <span className="flex-1 text-xs">Recording encrypted audio...</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => stopRecording(true)}
-                    className="h-7 text-xs hover:bg-destructive/20"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => stopRecording(false)}
-                    className="h-7 gap-1 px-2.5 text-xs font-semibold"
-                  >
-                    <Square className="h-3.5 w-3.5 fill-current" />
-                    <span>Done</span>
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => cameraInputRef.current?.click()}
-                    disabled={uploading || sending}
-                    className="h-10 w-10 shrink-0 rounded-full"
-                    title="Take photo (with 3D annotations)"
-                  >
-                    <Camera className="h-5 w-5 text-muted-foreground" />
-                  </Button>
+        {editing && (
+          <div className="mb-2 flex items-center justify-between rounded-lg bg-primary/10 px-3 py-1.5 text-xs text-primary">
+            <span>Editing message</span>
+            <button
+              onClick={() => {
+                setEditing(null);
+                setText("");
+              }}
+              className="p-1 hover:opacity-70"
+              aria-label="Cancel edit"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading || sending}
-                    className="h-10 w-10 shrink-0 rounded-full"
-                    title="Attach file"
-                  >
-                    {uploading ? (
-                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                    ) : (
-                      <Paperclip className="h-5 w-5 text-muted-foreground" />
-                    )}
-                  </Button>
+        {staged && (
+          <div className="mb-3 overflow-hidden rounded-2xl border border-white/15 bg-black/40 p-2.5 shadow-xl backdrop-blur-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                {staged.kind === "image" ? (
+                  <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-amber-500/30 shadow-[0_2px_10px_rgba(0,0,0,0.5)]">
+                    <img
+                      src={stagedPreviewUrl || undefined}
+                      alt="Selected preview"
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                    <FileText className="h-6 w-6" />
+                  </div>
+                )}
 
-                  <textarea
-                    ref={textareaRef}
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void handleSend();
-                      }
-                    }}
-                    placeholder="End-to-end encrypted message..."
-                    rows={1}
-                    maxLength={MESSAGE_MAX}
-                    className={cn(
-                      "flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/30",
-                      isDark
-                        ? "bg-white/10 border-white/15 text-white placeholder:text-white/50 focus:border-white/30"
-                        : "bg-background/90 border-border/60 text-foreground placeholder:text-muted-foreground focus:border-primary/50 shadow-inner"
-                    )}
-                  />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-xs font-semibold text-foreground">
+                      {staged.file.name}
+                    </span>
+                    <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-400">
+                      PHOTO
+                    </span>
+                  </div>
 
-                  {!text.trim() && !staged && !editingMessage ? (
-                    <Button
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Ready to send • End-to-end encrypted
+                  </p>
+
+                  {staged.kind === "image" && (
+                    <button
                       type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={startRecording}
-                      disabled={sending || uploading}
-                      className="h-10 w-10 shrink-0 rounded-full hover:text-primary"
-                      title="Hold to record voice"
+                      onClick={() => {
+                        setPhotoToEdit(staged.file);
+                        setIsPhotoEditorOpen(true);
+                      }}
+                      className="mt-1 flex items-center gap-1.5 text-xs font-bold text-amber-400 hover:text-amber-300 transition active:scale-95"
                     >
-                      <Mic className="h-5 w-5 text-muted-foreground" />
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      onClick={handleSend}
-                      disabled={sending || (!text.trim() && !staged)}
-                      className="h-10 w-10 shrink-0 rounded-full p-0 bg-gradient-to-tr from-primary to-primary/85 text-primary-foreground shadow-md shadow-primary/25 hover:shadow-primary/40 active:scale-95 transition-all"
-                    >
-                      {sending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <SendHorizontal className="h-4 w-4" />
-                      )}
-                    </Button>
+                      <Pencil className="h-3.5 w-3.5" />
+                      <span>Edit with 3D Tools (Arrow, Frame, Text, Draw)</span>
+                    </button>
                   )}
-                </>
-              )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setStaged(null)}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-muted-foreground hover:bg-destructive/20 hover:text-destructive transition active:scale-95"
+                aria-label="Remove attachment"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
           </div>
         )}
+
+        {err && <p className="mb-2 text-destructive text-xs">{err}</p>}
+
+        <div className="mb-1.5 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => applyFormat("*")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Bold (*text*)"
+          >
+            <Bold className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFormat("_")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Italic (_text_)"
+          >
+            <Italic className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFormat("~")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Strikethrough (~text~)"
+          >
+            <Strikethrough className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFormat("`")}
+            className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted text-muted-foreground transition"
+            title="Code (`code`)"
+          >
+            <CodeIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*,video/*,application/pdf,audio/*"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void stageFile(f);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*"
+            capture="environment"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void stageFile(f);
+              e.target.value = "";
+            }}
+          />
+
+          {!recording && (
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 shrink-0 rounded-full"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || uploading}
+                aria-label="Attach file"
+              >
+                <Paperclip className="h-5 w-5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10 shrink-0 rounded-full"
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={sending || uploading}
+                aria-label="Take photo"
+              >
+                <Camera className="h-5 w-5" />
+              </Button>
+            </div>
+          )}
+
+          {recording ? (
+            <div className="flex flex-1 items-center justify-between rounded-2xl bg-destructive/10 px-4 py-2 text-destructive text-sm">
+              <span className="flex items-center gap-2">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" />
+                Recording voice note... {recSecs}s
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => stopRecording(true)}
+                  className="h-8 text-destructive hover:bg-destructive/15 text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => stopRecording(false)}
+                  className="h-8 bg-destructive text-destructive-foreground hover:bg-destructive/90 text-xs"
+                >
+                  <Square className="mr-1 h-3 w-3" /> Finish
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <textarea
+              ref={taRef}
+              rows={1}
+              value={text}
+              onChange={(e) => handleTextChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (editing) void onSaveEdit();
+                  else void send();
+                }
+              }}
+              placeholder={editing ? "Edit message..." : "Type a secure message..."}
+              maxLength={MESSAGE_MAX}
+              className={cn(
+                "max-h-32 min-h-[42px] flex-1 resize-none rounded-2xl border px-4 py-2.5 text-sm leading-tight transition-all focus:outline-none focus:ring-2 focus:ring-primary/30",
+                darkWall
+                  ? "border-white/15 bg-white/10 text-white placeholder:text-white/50 focus:border-white/30"
+                  : "border-border/60 bg-background/90 text-foreground placeholder:text-muted-foreground focus:border-primary/50 shadow-inner"
+              )}
+            />
+          )}
+
+          {!recording && !text.trim() && !staged && !editing && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 shrink-0 rounded-full"
+              onClick={() => void startRecording()}
+              disabled={sending || uploading}
+              aria-label="Record voice note"
+            >
+              <Mic className="h-5 w-5" />
+            </Button>
+          )}
+
+          {(text.trim() || staged || editing) && !recording && (
+            <Button
+              type="button"
+              size="icon"
+              className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-tr from-primary to-primary/85 text-primary-foreground shadow-md shadow-primary/25 hover:shadow-primary/40 active:scale-95 transition-all"
+              disabled={sending || uploading}
+              onClick={() => {
+                if (editing) void onSaveEdit();
+                else void send();
+              }}
+              aria-label={editing ? "Save edit" : "Send message"}
+            >
+              {uploading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <SendHorizontal className="h-5 w-5" />
+              )}
+            </Button>
+          )}
+        </div>
       </footer>
 
-      {/* Group Info & Superpowers Modal */}
-      <Dialog open={infoOpen} onOpenChange={setInfoOpen}>
-        <DialogContent className="max-w-md rounded-2xl max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-lg font-bold">
-              <Users className="h-5 w-5 text-primary" />
-              <span>Group Settings & Members</span>
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-y-auto py-2 space-y-4">
-            {/* Group info header */}
-            <div className="flex items-center justify-between p-3 rounded-2xl bg-secondary/50">
-              <div>
-                <p className="text-base font-bold">{group?.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {group?.members.length ?? 0} members • Created{" "}
-                  {group?.created_at ? new Date(group.created_at).toLocaleDateString() : ""}
-                </p>
-              </div>
-              {isOwner && (
-                <span className="flex items-center gap-1 text-xs font-bold text-amber-500 bg-amber-500/10 px-2.5 py-1 rounded-full">
-                  <Crown className="h-3.5 w-3.5" /> Group Owner
-                </span>
-              )}
-            </div>
-
-            {/* Owner Superpower: Toggle Only Admins Can Send */}
-            {isOwner && (
-              <div className="p-3 rounded-2xl border border-primary/20 bg-primary/5 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold">Send Permission</p>
-                    <p className="text-xs text-muted-foreground">
-                      {group?.only_admins_can_send
-                        ? "Restricted: Only admins and owner can send"
-                        : "Open: All authorized members can send"}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={group?.only_admins_can_send ? "default" : "outline"}
-                    onClick={handleToggleOnlyAdminsCanSend}
-                    disabled={updatingSettings}
-                    className="rounded-xl text-xs"
-                  >
-                    {group?.only_admins_can_send ? "Allow Everyone" : "Admins Only"}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Member List */}
-            <div className="space-y-2">
-              <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground px-1">
-                Members Roster
-              </p>
-              <div className="space-y-2">
-                {group?.members.map((m) => {
-                  const isThisMemberOwner = m.user_id === group.created_by;
-                  const isThisMe = m.user_id === me;
-                  const hasKeys = Boolean(m.profile.public_key);
-
-                  // Superpower permissions:
-                  // Owner can manage everyone except themselves
-                  // Admin can manage regular members
-                  const canManageThisUser =
-                    !isThisMe &&
-                    (isOwner || (isAdminOrOwner && m.role !== "admin" && !isThisMemberOwner));
-
-                  return (
-                    <div
-                      key={m.user_id}
-                      className="flex items-center justify-between p-2.5 rounded-xl bg-secondary/40 hover:bg-secondary/60 transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                        <div className="h-9 w-9 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary shrink-0">
-                          {m.profile.avatar_url ? (
-                            <img
-                              src={m.profile.avatar_url}
-                              alt={m.profile.username}
-                              className="h-full w-full rounded-full object-cover"
-                            />
-                          ) : (
-                            m.profile.username[0]?.toUpperCase()
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-sm font-semibold truncate">
-                              {m.profile.username}
-                            </span>
-                            {isThisMe && (
-                              <span className="text-[10px] text-muted-foreground">(You)</span>
-                            )}
-                            {isThisMemberOwner ? (
-                              <span className="flex items-center gap-0.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                                <Crown className="h-2.5 w-2.5" /> Owner
-                              </span>
-                            ) : m.role === "admin" ? (
-                              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">
-                                Admin
-                              </span>
-                            ) : null}
-                            {!m.can_send && (
-                              <span className="flex items-center gap-0.5 rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-bold text-destructive">
-                                <VolumeX className="h-2.5 w-2.5" /> Muted
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">
-                            {hasKeys ? (
-                              <>
-                                <ShieldCheck className="h-3 w-3 text-emerald-500" />
-                                <span>E2EE Ready</span>
-                              </>
-                            ) : (
-                              <>
-                                <ShieldAlert className="h-3 w-3 text-amber-500" />
-                                <span>Keys pending (tolerated)</span>
-                              </>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Management Action Menu */}
-                      {canManageThisUser && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full">
-                              <MoreVertical className="h-3.5 w-3.5" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-48 rounded-2xl text-xs">
-                            {/* Role management: Owner only */}
-                            {isOwner && (
-                              <DropdownMenuItem
-                                onClick={() => handleToggleMemberRole(m.user_id, m.role)}
-                                className="cursor-pointer"
-                              >
-                                {m.role === "admin" ? (
-                                  <>
-                                    <UserX className="mr-2 h-3.5 w-3.5" /> Demote to Member
-                                  </>
-                                ) : (
-                                  <>
-                                    <UserCheck className="mr-2 h-3.5 w-3.5" /> Promote to Admin
-                                  </>
-                                )}
-                              </DropdownMenuItem>
-                            )}
-
-                            {/* Mute / Unmute message sending */}
-                            <DropdownMenuItem
-                              onClick={() => handleToggleMemberCanSend(m.user_id, m.can_send)}
-                              className="cursor-pointer"
-                            >
-                              {m.can_send ? (
-                                <>
-                                  <VolumeX className="mr-2 h-3.5 w-3.5 text-destructive" />
-                                  <span className="text-destructive">Mute / Ban from sending</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Volume2 className="mr-2 h-3.5 w-3.5 text-primary" />
-                                  <span>Allow sending messages</span>
-                                </>
-                              )}
-                            </DropdownMenuItem>
-
-                            <DropdownMenuSeparator />
-
-                            {/* Kick member */}
-                            <DropdownMenuItem
-                              onClick={() => handleKickMember(m.user_id, m.profile.username)}
-                              className="cursor-pointer text-destructive"
-                            >
-                              <LogOut className="mr-2 h-3.5 w-3.5" /> Remove from group
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* 3D Photo Editor Modal */}
       {isPhotoEditorOpen && photoToEdit && (
         <PhotoEditorModal
           file={photoToEdit}
