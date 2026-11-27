@@ -415,6 +415,7 @@ function GroupChatPage() {
         setIsPhotoEditorOpen(true);
       } else {
         setStaged({ file, kind });
+        toast.success(`${kind === "video" ? "Video" : kind === "audio" ? "Audio" : "Document"} ready to send!`);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unsupported file.");
@@ -1318,10 +1319,11 @@ function GroupChatPage() {
       </Dialog>
 
       {/* 3D Photo Editor Modal */}
-      {photoToEdit && (
+      {isPhotoEditorOpen && photoToEdit && (
         <PhotoEditorModal
-          open={isPhotoEditorOpen}
           file={photoToEdit}
+          isOpen={isPhotoEditorOpen}
+          open={isPhotoEditorOpen}
           onClose={() => {
             setIsPhotoEditorOpen(false);
             setPhotoToEdit(null);
@@ -1330,11 +1332,19 @@ function GroupChatPage() {
             setStaged({ file: editedFile, kind: "image" });
             setIsPhotoEditorOpen(false);
             setPhotoToEdit(null);
+            toast.success("Photo edited and attached!");
+          }}
+          onSkipEdit={(origFile) => {
+            setStaged({ file: origFile, kind: "image" });
+            setIsPhotoEditorOpen(false);
+            setPhotoToEdit(null);
+            toast.success("Photo attached!");
           }}
           onSkip={(origFile) => {
             setStaged({ file: origFile, kind: "image" });
             setIsPhotoEditorOpen(false);
             setPhotoToEdit(null);
+            toast.success("Photo attached!");
           }}
         />
       )}
