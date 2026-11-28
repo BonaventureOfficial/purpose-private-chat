@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -24,10 +24,13 @@ import {
 import {
   listConversations,
   listMyGroups,
+  listDirectoryUsers,
+  searchPeople,
   forwardMessage,
   myId,
   type Conversation,
   type GroupSummary,
+  type PublicProfile,
   type Message,
 } from "@/lib/chat";
 import { cn } from "@/lib/utils";
@@ -50,15 +53,20 @@ export type ForwardTarget = {
 export function ForwardModal({ isOpen, onClose, message, currentUserId }: ForwardModalProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [directoryUsers, setDirectoryUsers] = useState<PublicProfile[]>([]);
+  const [searchResults, setSearchResults] = useState<PublicProfile[]>([]);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Map<string, ForwardTarget>>(new Map());
   const [loading, setLoading] = useState(false);
+  const [searchingRemote, setSearchingRemote] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       setSelected(new Map());
       setSearch("");
+      setSearchResults([]);
       return;
     }
 
@@ -69,13 +77,15 @@ export function ForwardModal({ isOpen, onClose, message, currentUserId }: Forwar
       try {
         const me = currentUserId || (await myId());
         if (!me) return;
-        const [convs, grps] = await Promise.all([
+        const [convs, grps, dirUsers] = await Promise.all([
           listConversations(me).catch(() => []),
           listMyGroups(me).catch(() => []),
+          listDirectoryUsers(60).catch(() => []),
         ]);
         if (active) {
           setConversations(convs);
           setGroups(grps);
+          setDirectoryUsers(dirUsers);
         }
       } catch (err) {
         console.error("Failed to load contacts for forward:", err);
@@ -89,22 +99,40 @@ export function ForwardModal({ isOpen, onClose, message, currentUserId }: Forwar
     };
   }, [isOpen, currentUserId]);
 
-  const targets = useMemo<ForwardTarget[]>(() => {
-    const list: ForwardTarget[] = [];
+  // Scalable remote search debounced
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
 
-    // Add Direct Conversations
-    for (const c of conversations) {
-      list.push({
-        type: "user",
-        id: c.partner.id,
-        name: c.partner.username,
-        avatarUrl: c.partner.avatar_url,
-      });
+    const q = search.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchingRemote(false);
+      return;
     }
 
-    // Add Groups
+    setSearchingRemote(true);
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const results = await searchPeople(q);
+        setSearchResults(results);
+      } catch (err) {
+        console.error("Failed remote search in ForwardModal:", err);
+      } finally {
+        setSearchingRemote(false);
+      }
+    }, 220);
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [search]);
+
+  const targets = useMemo<ForwardTarget[]>(() => {
+    const map = new Map<string, ForwardTarget>();
+
+    // 1. Add Groups
     for (const g of groups) {
-      list.push({
+      map.set(`group:${g.id}`, {
         type: "group",
         id: g.id,
         name: g.name,
@@ -112,16 +140,53 @@ export function ForwardModal({ isOpen, onClose, message, currentUserId }: Forwar
       });
     }
 
-    if (!search.trim()) return list;
+    // 2. Add Direct Conversations
+    for (const c of conversations) {
+      map.set(`user:${c.partner.id}`, {
+        type: "user",
+        id: c.partner.id,
+        name: c.partner.username,
+        avatarUrl: c.partner.avatar_url,
+      });
+    }
+
+    // 3. Add Directory Users
+    for (const u of directoryUsers) {
+      const key = `user:${u.id}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          type: "user",
+          id: u.id,
+          name: u.username,
+          avatarUrl: u.avatar_url,
+        });
+      }
+    }
+
+    // 4. Add Live Search Results
+    for (const s of searchResults) {
+      const key = `user:${s.id}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          type: "user",
+          id: s.id,
+          name: s.username,
+          avatarUrl: s.avatar_url,
+        });
+      }
+    }
+
+    const all = Array.from(map.values());
+    if (!search.trim()) return all;
 
     const query = search.trim().toLowerCase();
-    return list.filter((t) => t.name.toLowerCase().includes(query));
-  }, [conversations, groups, search]);
+    return all.filter((t) => t.name.toLowerCase().includes(query));
+  }, [conversations, groups, directoryUsers, searchResults, search]);
 
   const toggleSelect = (target: ForwardTarget) => {
-    const key = `${target.type}:${target.id}`;
     setSelected((prev) => {
       const next = new Map(prev);
+      const key = `${target.type}:${target.id}`;
       if (next.has(key)) {
         next.delete(key);
       } else {
@@ -131,12 +196,17 @@ export function ForwardModal({ isOpen, onClose, message, currentUserId }: Forwar
     });
   };
 
-  const handleSend = async () => {
-    if (!message || selected.size === 0) return;
+  const handleForward = async () => {
+    if (!message) return;
+    if (selected.size === 0) {
+      toast.error("Please select at least one contact or group");
+      return;
+    }
+
     setSubmitting(true);
     try {
       const me = currentUserId || (await myId());
-      if (!me) throw new Error("You must be logged in.");
+      if (!me) throw new Error("User not authenticated");
 
       const targetList = Array.from(selected.values()).map((t) => ({
         type: t.type,
@@ -145,134 +215,172 @@ export function ForwardModal({ isOpen, onClose, message, currentUserId }: Forwar
 
       await forwardMessage(me, targetList, message);
       toast.success(
-        selected.size === 1
-          ? "Message forwarded successfully!"
-          : `Message forwarded to ${selected.size} recipients!`
+        `Forwarded to ${selected.size} ${selected.size === 1 ? "chat" : "chats"}`
       );
       onClose();
     } catch (err: any) {
-      console.error("Forwarding failed:", err);
-      toast.error(err?.message || "Failed to forward message.");
+      console.error("Forward failed:", err);
+      toast.error(err?.message || "Failed to forward message");
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (!isOpen || !message) return null;
+  const renderMessagePreview = () => {
+    if (!message) return null;
+
+    return (
+      <div className="mx-1 my-2 p-2.5 rounded-xl bg-muted/60 border border-border/50 text-xs flex items-center gap-2.5">
+        <Forward className="h-4 w-4 text-primary shrink-0" />
+        <div className="flex-1 truncate">
+          {message.attachment ? (
+            <div className="flex items-center gap-1.5 font-medium">
+              {message.attachment.type.startsWith("image/") && <ImageIcon className="h-3.5 w-3.5 text-blue-500" />}
+              {message.attachment.type.startsWith("video/") && <VideoIcon className="h-3.5 w-3.5 text-purple-500" />}
+              {message.attachment.type.startsWith("audio/") && <Music className="h-3.5 w-3.5 text-emerald-500" />}
+              {!message.attachment.type.startsWith("image/") &&
+                !message.attachment.type.startsWith("video/") &&
+                !message.attachment.type.startsWith("audio/") && <FileText className="h-3.5 w-3.5 text-amber-500" />}
+              <span className="truncate">{message.attachment.name || "Media"}</span>
+              {message.body && <span className="opacity-70 truncate font-normal">• {message.body}</span>}
+            </div>
+          ) : (
+            <span className="truncate font-medium text-foreground">{message.body}</span>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col p-0 overflow-hidden rounded-2xl border bg-background/95 backdrop-blur-xl">
-        <DialogHeader className="p-4 pb-2 border-b">
-          <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && !submitting && onClose()}>
+      <DialogContent className="max-w-md w-[92vw] max-h-[85vh] flex flex-col p-4 sm:p-6 rounded-2xl bg-card border-border/60 shadow-xl overflow-hidden">
+        <DialogHeader className="pb-2">
+          <DialogTitle className="text-base sm:text-lg font-semibold flex items-center gap-2">
             <Forward className="h-5 w-5 text-primary" />
-            Transfer Message
+            <span>Forward Message</span>
           </DialogTitle>
+          {renderMessagePreview()}
         </DialogHeader>
 
-        {/* Message preview snippet */}
-        <div className="px-4 py-2.5 bg-muted/40 border-b text-xs flex items-center gap-2 text-muted-foreground">
-          {message.attachment_type === "image" && <ImageIcon className="h-4 w-4 shrink-0 text-primary" />}
-          {message.attachment_type === "video" && <VideoIcon className="h-4 w-4 shrink-0 text-primary" />}
-          {message.attachment_type === "audio" && <Music className="h-4 w-4 shrink-0 text-primary" />}
-          {message.attachment_type === "pdf" && <FileText className="h-4 w-4 shrink-0 text-primary" />}
-          <span className="truncate flex-1 font-medium">
-            {message.body ? message.body : message.attachment_name || "Attachment"}
-          </span>
-          {message.forward_locked && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 font-semibold shrink-0">
-              <Lock className="h-3 w-3" /> Locked
-            </span>
+        {/* Scalable Search Bar */}
+        <div className="relative my-2">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search contacts or groups..."
+            className="pl-9 pr-9 h-10 rounded-xl bg-secondary/50 border-border/50 focus-visible:ring-primary text-sm"
+          />
+          {searchingRemote && (
+            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" />
           )}
         </div>
 
-        {/* Search input */}
-        <div className="p-3 border-b">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search contacts or groups..."
-              className="pl-9 h-9 text-xs rounded-xl bg-muted/50 border-border/60"
-            />
+        {/* Selected count pill */}
+        {selected.size > 0 && (
+          <div className="flex items-center justify-between px-1 text-xs text-muted-foreground font-medium">
+            <span>{selected.size} selected</span>
+            <button
+              type="button"
+              onClick={() => setSelected(new Map())}
+              className="text-primary hover:underline text-xs"
+            >
+              Clear
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* Recipients list */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-[220px] max-h-[340px]">
+        {/* Scalable Contacts and Groups List */}
+        <div className="flex-1 overflow-y-auto space-y-1 my-2 pr-1 min-h-[220px] max-h-[380px]">
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-10 text-muted-foreground text-xs gap-2">
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              <span>Loading recipients...</span>
+            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin mb-2" />
+              <span className="text-xs">Loading contacts...</span>
             </div>
           ) : targets.length === 0 ? (
-            <div className="py-10 text-center text-xs text-muted-foreground">
-              {search ? "No matching contacts or groups found." : "No contacts available to transfer."}
+            <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground px-4">
+              <Users className="h-8 w-8 stroke-[1.5] opacity-50 mb-2" />
+              <p className="text-sm font-medium">No contacts found</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {search.trim() ? "Try another search term" : "No other users or groups available yet"}
+              </p>
             </div>
           ) : (
             targets.map((t) => {
-              const isSelected = selected.has(`${t.type}:${t.id}`);
+              const key = `${t.type}:${t.id}`;
+              const isSelected = selected.has(key);
               return (
-                <button
-                  key={`${t.type}:${t.id}`}
-                  type="button"
+                <div
+                  key={key}
                   onClick={() => toggleSelect(t)}
                   className={cn(
-                    "w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-colors text-xs font-medium",
+                    "flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors select-none",
                     isSelected
-                      ? "bg-primary/10 border border-primary/30 text-primary"
-                      : "hover:bg-muted/60 text-foreground"
+                      ? "bg-primary/10 border border-primary/30"
+                      : "hover:bg-secondary/70 border border-transparent"
                   )}
                 >
-                  <div className="flex items-center gap-3 truncate">
-                    <div className="h-8 w-8 rounded-full bg-primary/15 flex items-center justify-center shrink-0 font-bold text-xs text-primary overflow-hidden">
-                      {t.avatarUrl ? (
-                        <img src={t.avatarUrl} alt={t.name} className="h-full w-full object-cover" />
-                      ) : t.type === "group" ? (
-                        <Users className="h-4 w-4" />
-                      ) : (
-                        t.name.slice(0, 1).toUpperCase()
-                      )}
-                    </div>
-                    <div className="truncate">
-                      <p className="font-semibold truncate leading-tight">{t.name}</p>
-                      <p className="text-[10px] text-muted-foreground capitalize flex items-center gap-1">
+                  <div className="relative shrink-0">
+                    {t.avatarUrl ? (
+                      <img
+                        src={t.avatarUrl}
+                        alt={t.name}
+                        className="h-10 w-10 rounded-full object-cover border border-border"
+                      />
+                    ) : (
+                      <div className="h-10 w-10 rounded-full bg-secondary flex items-center justify-center border border-border text-foreground font-semibold text-xs">
                         {t.type === "group" ? (
-                          <>
-                            <Users className="h-2.5 w-2.5" /> Group
-                          </>
+                          <Users className="h-4 w-4 text-primary" />
                         ) : (
-                          <>
-                            <MessageSquare className="h-2.5 w-2.5" /> Direct Chat
-                          </>
+                          t.name.slice(0, 2).toUpperCase()
                         )}
-                      </p>
-                    </div>
+                      </div>
+                    )}
+                    {t.type === "group" && (
+                      <span className="absolute -bottom-0.5 -right-0.5 bg-primary text-primary-foreground text-[9px] font-bold px-1 rounded-full">
+                        G
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{t.name}</p>
+                    <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                      {t.type === "group" ? (
+                        <>
+                          <Users className="h-3 w-3" />
+                          <span>Group</span>
+                        </>
+                      ) : (
+                        <>
+                          <MessageSquare className="h-3 w-3" />
+                          <span>Direct contact</span>
+                        </>
+                      )}
+                    </p>
                   </div>
 
                   <div
                     className={cn(
-                      "h-5 w-5 rounded-full border flex items-center justify-center shrink-0 transition-colors",
+                      "h-5 w-5 rounded-full flex items-center justify-center border transition-all shrink-0",
                       isSelected
                         ? "bg-primary border-primary text-primary-foreground"
-                        : "border-muted-foreground/30 bg-background"
+                        : "border-muted-foreground/40"
                     )}
                   >
-                    {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                    {isSelected && <Check className="h-3.5 w-3.5 stroke-[2.5]" />}
                   </div>
-                </button>
+                </div>
               );
             })
           )}
         </div>
 
-        {/* Footer */}
-        <DialogFooter className="p-3 border-t bg-muted/20 flex flex-row items-center justify-between gap-2 sm:justify-between">
+        <DialogFooter className="pt-2 sm:pt-4 border-t border-border/50 gap-2 flex-row justify-end">
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={onClose}
             disabled={submitting}
             className="rounded-xl text-xs h-9"
@@ -281,20 +389,19 @@ export function ForwardModal({ isOpen, onClose, message, currentUserId }: Forwar
           </Button>
           <Button
             type="button"
-            size="sm"
-            onClick={handleSend}
+            onClick={handleForward}
             disabled={selected.size === 0 || submitting}
-            className="rounded-xl text-xs h-9 px-4 gap-1.5 font-semibold"
+            className="rounded-xl text-xs h-9 px-4 gap-1.5 font-medium"
           >
             {submitting ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Sending...
+                <span>Forwarding...</span>
               </>
             ) : (
               <>
                 <Forward className="h-3.5 w-3.5" />
-                Transfer {selected.size > 0 && `(${selected.size})`}
+                <span>Forward {selected.size > 0 && `(${selected.size})`}</span>
               </>
             )}
           </Button>
