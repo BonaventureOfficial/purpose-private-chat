@@ -21,7 +21,7 @@ export type RelayOutboxItem = {
   recipient_id: string;
   group_id?: string | null;
   body: string;
-  relay_kind: "message" | "edit" | "delete" | "read";
+  relay_kind: "message" | "edit" | "delete" | "read" | "lock";
   target_id: string | null;
   created_at: string;
   reply_to_id?: string | null;
