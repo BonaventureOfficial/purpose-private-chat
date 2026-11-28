@@ -50,6 +50,8 @@ export type Message = {
   attachment_key?: string | null;
   attachment_iv?: string | null;
   local_status?: "queued" | "sent" | "delivered" | "read";
+  forward_locked?: boolean;
+  forwarded?: boolean;
 };
 
 export type Attachment = {
@@ -185,7 +187,7 @@ export async function loadThread(me: string, otherOrGroupId: string): Promise<Me
 async function enqueueControl(
   me: string,
   recipient: string,
-  kind: "edit" | "delete" | "read",
+  kind: "edit" | "delete" | "read" | "lock",
   target: string,
   body = "",
   groupId: string | null = null
@@ -254,6 +256,8 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
       attachment_key: payload.attachment?.key ?? null,
       attachment_iv: payload.attachment?.iv ?? null,
       local_status: "delivered",
+      forward_locked: Boolean(payload.forward_locked),
+      forwarded: Boolean(payload.forwarded),
     };
 
     await saveLocalMessage(me, message);
@@ -262,6 +266,12 @@ export async function consumeRelay(me: string, item: RelayMessage): Promise<void
     const isGroupDelete = original && (original.group_id || item.group_id);
     const isDirectSender = original && original.sender_id === item.sender_id && original.recipient_id === me;
     if (original && (isDirectSender || isGroupDelete)) {
+      if (item.relay_kind === "lock") {
+        const isLocked = item.body === "true" || item.body === "locked";
+        await updateLocalMessageStatus(me, original.id, {
+          forward_locked: isLocked,
+        });
+      }
       if (item.relay_kind === "edit") {
         let editedText = item.body;
         if (isE2EE(item.body)) {
@@ -397,7 +407,8 @@ export async function sendMessage(
   to: string,
   body: string,
   replyTo: string | null = null,
-  att: Attachment | null = null
+  att: Attachment | null = null,
+  options?: { forward_locked?: boolean; forwarded?: boolean }
 ): Promise<Message> {
   const text = body.trim();
   if (!text && !att) throw new Error("Message is empty.");
@@ -440,6 +451,8 @@ export async function sendMessage(
         }
       : null,
     reply_to_id: replyTo,
+    forward_locked: options?.forward_locked ?? false,
+    forwarded: options?.forwarded ?? false,
   });
 
   const message: LocalMessage = {
@@ -459,6 +472,8 @@ export async function sendMessage(
     attachment_key: att?.key ?? null,
     attachment_iv: att?.iv ?? null,
     local_status: "queued",
+    forward_locked: options?.forward_locked ?? false,
+    forwarded: options?.forwarded ?? false,
   };
 
   const item: RelayOutboxItem = {
@@ -894,7 +909,8 @@ export async function sendGroupMessage(
   groupId: string,
   body: string,
   replyTo: string | null = null,
-  att: Attachment | null = null
+  att: Attachment | null = null,
+  options?: { forward_locked?: boolean; forwarded?: boolean }
 ): Promise<Message> {
   const text = body.trim();
   if (!text && !att) throw new Error("Message is empty.");
@@ -936,6 +952,8 @@ export async function sendGroupMessage(
     attachment_key: att?.key ?? null,
     attachment_iv: att?.iv ?? null,
     local_status: "queued",
+    forward_locked: options?.forward_locked ?? false,
+    forwarded: options?.forwarded ?? false,
   };
 
   await saveLocalMessage(me, localMessage);
@@ -959,6 +977,8 @@ export async function sendGroupMessage(
     reply_to_id: replyTo,
     message_id: messageId,
     group_id: groupId,
+    forward_locked: options?.forward_locked ?? false,
+    forwarded: options?.forwarded ?? false,
   };
 
   for (const m of readyMembers) {
@@ -1004,4 +1024,59 @@ export async function leaveGroup(groupId: string): Promise<void> {
 
   if (error) throw new Error(error.message);
   await deleteLocalGroup(me, groupId);
+}
+export async function toggleMessageLock(messageId: string): Promise<boolean> {
+  const me = await myId();
+  if (!me) throw new Error("You must be signed in.");
+  const allMessages = await getLocalMessages(me);
+  const message = allMessages.find((m) => m.id === messageId);
+  if (!message) throw new Error("Message not found.");
+  if (message.sender_id !== me) {
+    throw new Error("Only the original sender can lock or unlock message forwarding.");
+  }
+
+  const nextState = !message.forward_locked;
+  await updateLocalMessageStatus(me, messageId, { forward_locked: nextState });
+
+  // Relay the lock status change to the recipient or group members
+  if (message.group_id) {
+    try {
+      const details = await getGroupDetails(message.group_id);
+      const otherMembers = details.members.filter((m) => m.user_id !== me);
+      for (const m of otherMembers) {
+        await enqueueControl(me, m.user_id, "lock", messageId, nextState ? "true" : "false", message.group_id);
+      }
+    } catch (err) {
+      console.warn("Failed to notify group members of lock status:", err);
+    }
+  } else if (message.recipient_id && message.recipient_id !== me) {
+    await enqueueControl(me, message.recipient_id, "lock", messageId, nextState ? "true" : "false", null);
+  }
+
+  void syncRelay(me).catch(() => {});
+  return nextState;
+}
+
+export async function forwardMessage(
+  me: string,
+  destinations: { type: "user" | "group"; id: string }[],
+  message: Message
+): Promise<void> {
+  const att: Attachment | null = message.attachment_url && message.attachment_type
+    ? {
+        url: message.attachment_url,
+        type: message.attachment_type,
+        name: message.attachment_name || "attachment",
+        key: message.attachment_key ?? null,
+        iv: message.attachment_iv ?? null,
+      }
+    : null;
+
+  for (const dest of destinations) {
+    if (dest.type === "user") {
+      await sendMessage(me, dest.id, message.body, null, att, { forwarded: true });
+    } else if (dest.type === "group") {
+      await sendGroupMessage(dest.id, message.body, null, att, { forwarded: true });
+    }
+  }
 }
