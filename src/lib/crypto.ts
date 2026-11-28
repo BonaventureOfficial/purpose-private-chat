@@ -14,6 +14,8 @@ export type EncryptedPayload = {
   reply_to_id?: string | null;
   message_id?: string | null;
   group_id?: string | null;
+  forward_locked?: boolean;
+  forwarded?: boolean;
 };
 
 type KeyVaultRecord = {
