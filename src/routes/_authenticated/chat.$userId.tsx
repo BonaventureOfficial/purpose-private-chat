@@ -12,6 +12,8 @@ import {
   Copy,
   CornerUpLeft,
   Lock,
+  Unlock,
+  Forward,
   MoreVertical,
   Pencil,
   SendHorizontal,
@@ -42,6 +44,7 @@ import {
   markRead,
   myId,
   sendMessage,
+  toggleMessageLock,
   type Attachment,
   type Message,
   type PublicProfile,
@@ -55,6 +58,7 @@ import {
   cacheDecryptedMedia,
 } from "@/lib/crypto";
 import { PhotoEditorModal } from "@/components/purpose/PhotoEditorModal";
+import { ForwardModal } from "@/components/purpose/ForwardModal";
 import { useBackground } from "@/components/purpose/AppShell";
 import { isDarkBackground } from "@/lib/purpose";
 
@@ -335,6 +339,38 @@ function ChatPage() {
     };
   }, [stagedPreviewUrl]);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [menuOpenForMessageId, setMenuOpenForMessageId] = useState<string | null>(null);
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleBubblePointerDown = (msgId: string) => {
+    if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = setTimeout(() => {
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        try { navigator.vibrate?.(40); } catch {}
+      }
+      setMenuOpenForMessageId(msgId);
+    }, 450);
+  };
+
+  const handleBubblePointerUp = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  const handleToggleLock = async (msg: Message) => {
+    try {
+      const locked = await toggleMessageLock(msg.id);
+      toast.success(locked ? "Message locked (forwarding disabled)" : "Message unlocked");
+      setDisplay((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, forward_locked: locked } : m))
+      );
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to update lock status");
+    }
+  };
   const [editing, setEditing] = useState<Message | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
@@ -779,13 +815,27 @@ function ChatPage() {
                     </div>
                   )}
                   <div
+                    onPointerDown={() => handleBubblePointerDown(m.id)}
+                    onPointerUp={handleBubblePointerUp}
+                    onPointerCancel={handleBubblePointerUp}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenuOpenForMessageId(m.id);
+                    }}
                     className={cn(
-                      "relative max-w-[80%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-sm break-words transition-all",
+                      "relative max-w-[80%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed shadow-sm break-words transition-all cursor-pointer select-text",
                       mine
                         ? "rounded-br-xs bg-gradient-to-br from-primary via-primary to-primary/90 text-primary-foreground shadow-md shadow-primary/20 border border-primary-foreground/15"
                         : "rounded-tl-xs bg-card/90 backdrop-blur-md text-card-foreground border border-border/60 shadow-xs dark:bg-zinc-900/85 dark:border-white/10"
                     )}
                   >
+                    {m.forwarded && (
+                      <div className={cn("flex items-center gap-1 text-[11px] mb-1.5 italic font-medium opacity-85", mine ? "text-primary-foreground" : "text-muted-foreground")}>
+                        <Forward className="h-3 w-3 inline" />
+                        <span>Forwarded</span>
+                      </div>
+                    )}
+
                     {m.reply_to_id && (() => {
                       const parent = display.find((x) => x.id === m.reply_to_id);
                       return (
@@ -825,11 +875,26 @@ function ChatPage() {
                       )}
                     >
                       {time(m.created_at)}
+                      {m.forward_locked && (
+                        <span
+                          title="Forwarding locked by sender"
+                          className={cn(
+                            "inline-flex items-center gap-0.5 text-[10px] ml-1 font-semibold px-1.5 py-0.5 rounded-full shadow-xs",
+                            mine ? "bg-black/25 text-primary-foreground" : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                          )}
+                        >
+                          <Lock className="h-2.5 w-2.5 inline" />
+                          <span>Locked</span>
+                        </span>
+                      )}
                       {mine && <Ticks sending={awaitingDelivery} read={!isPending && !!m.read_at} />}
                     </span>
                   </div>
 
-                  <DropdownMenu>
+                  <DropdownMenu
+                    open={menuOpenForMessageId === m.id}
+                    onOpenChange={(open) => setMenuOpenForMessageId(open ? m.id : null)}
+                  >
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
@@ -842,7 +907,7 @@ function ChatPage() {
                           <MoreVertical className="h-4 w-4" />
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align={mine ? "end" : "start"} className="w-36">
+                      <DropdownMenuContent align={mine ? "end" : "start"} className="w-44 rounded-xl text-xs">
                         <DropdownMenuItem
                           onSelect={() => {
                             void navigator.clipboard.writeText(m.body);
@@ -851,6 +916,34 @@ function ChatPage() {
                         >
                           <Copy className="h-4 w-4" /> Copy
                         </DropdownMenuItem>
+
+                        {/* Transfer & Lock options */}
+                        {mine ? (
+                          <>
+                            <DropdownMenuItem onSelect={() => setForwardingMessage(m)}>
+                              <Forward className="h-4 w-4 text-primary" /> Transfer
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => void handleToggleLock(m)}>
+                              {m.forward_locked ? (
+                                <>
+                                  <Unlock className="h-4 w-4 text-emerald-500" /> Unlock Transfer
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="h-4 w-4 text-amber-500" /> Lock Transfer
+                                </>
+                              )}
+                            </DropdownMenuItem>
+                          </>
+                        ) : m.forward_locked ? (
+                          <DropdownMenuItem disabled className="opacity-60 cursor-not-allowed text-muted-foreground">
+                            <Lock className="h-4 w-4 text-amber-500" /> Locked by sender
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem onSelect={() => setForwardingMessage(m)}>
+                            <Forward className="h-4 w-4 text-primary" /> Transfer
+                          </DropdownMenuItem>
+                        )}
                         {mine && (
                           <DropdownMenuItem
                             onSelect={() => {
