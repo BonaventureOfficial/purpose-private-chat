@@ -380,8 +380,8 @@ function GroupChatPage() {
   const handleToggleLock = async (msg: Message) => {
     try {
       const locked = await toggleMessageLock(msg.id);
-      toast.success(locked ? "Message locked (forwarding disabled)" : "Message unlocked");
-      setDisplay((prev) =>
+      toast.success(locked ? "Forwarding locked for this message" : "Forwarding unlocked");
+      setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, forward_locked: locked } : m))
       );
     } catch (err: any) {
@@ -868,31 +868,31 @@ function GroupChatPage() {
                           <Copy className="mr-2 h-3.5 w-3.5" /> Copy
                         </DropdownMenuItem>
 
-                        {/* Transfer & Lock options */}
+                        {/* Forward & Lock options */}
                         {isMine ? (
                           <>
                             <DropdownMenuItem onClick={() => setForwardingMessage(m)}>
-                              <Forward className="mr-2 h-3.5 w-3.5 text-primary" /> Transfer
+                              <Forward className="mr-2 h-3.5 w-3.5 text-primary" /> Forward
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => void handleToggleLock(m)}>
                               {m.forward_locked ? (
                                 <>
-                                  <Unlock className="mr-2 h-3.5 w-3.5 text-emerald-500" /> Unlock Transfer
+                                  <Unlock className="mr-2 h-3.5 w-3.5 text-emerald-500" /> Unlock Forwarding
                                 </>
                               ) : (
                                 <>
-                                  <Lock className="mr-2 h-3.5 w-3.5 text-amber-500" /> Lock Transfer
+                                  <Lock className="mr-2 h-3.5 w-3.5 text-amber-500" /> Lock Forwarding
                                 </>
                               )}
                             </DropdownMenuItem>
                           </>
                         ) : m.forward_locked ? (
                           <DropdownMenuItem disabled className="opacity-60 cursor-not-allowed text-muted-foreground">
-                            <Lock className="mr-2 h-3.5 w-3.5 text-amber-500" /> Locked by sender
+                            <Lock className="mr-2 h-3.5 w-3.5 text-amber-500" /> Forwarding locked
                           </DropdownMenuItem>
                         ) : (
                           <DropdownMenuItem onClick={() => setForwardingMessage(m)}>
-                            <Forward className="mr-2 h-3.5 w-3.5 text-primary" /> Transfer
+                            <Forward className="mr-2 h-3.5 w-3.5 text-primary" /> Forward
                           </DropdownMenuItem>
                         )}
                         {isMine && (
