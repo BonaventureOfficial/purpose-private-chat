@@ -1427,6 +1427,13 @@ function GroupChatPage() {
           }}
         />
       )}
+
+      <ForwardModal
+        isOpen={Boolean(forwardingMessage)}
+        onClose={() => setForwardingMessage(null)}
+        message={forwardingMessage}
+        currentUserId={me}
+      />
     </div>
   );
 }
