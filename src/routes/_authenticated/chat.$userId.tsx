@@ -917,31 +917,31 @@ function ChatPage() {
                           <Copy className="h-4 w-4" /> Copy
                         </DropdownMenuItem>
 
-                        {/* Transfer & Lock options */}
+                        {/* Forward & Lock options */}
                         {mine ? (
                           <>
                             <DropdownMenuItem onSelect={() => setForwardingMessage(m)}>
-                              <Forward className="h-4 w-4 text-primary" /> Transfer
+                              <Forward className="h-4 w-4 text-primary" /> Forward
                             </DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => void handleToggleLock(m)}>
                               {m.forward_locked ? (
                                 <>
-                                  <Unlock className="h-4 w-4 text-emerald-500" /> Unlock Transfer
+                                  <Unlock className="h-4 w-4 text-emerald-500" /> Unlock Forwarding
                                 </>
                               ) : (
                                 <>
-                                  <Lock className="h-4 w-4 text-amber-500" /> Lock Transfer
+                                  <Lock className="h-4 w-4 text-amber-500" /> Lock Forwarding
                                 </>
                               )}
                             </DropdownMenuItem>
                           </>
                         ) : m.forward_locked ? (
                           <DropdownMenuItem disabled className="opacity-60 cursor-not-allowed text-muted-foreground">
-                            <Lock className="h-4 w-4 text-amber-500" /> Locked by sender
+                            <Lock className="h-4 w-4 text-amber-500" /> Forwarding locked
                           </DropdownMenuItem>
                         ) : (
                           <DropdownMenuItem onSelect={() => setForwardingMessage(m)}>
-                            <Forward className="h-4 w-4 text-primary" /> Transfer
+                            <Forward className="h-4 w-4 text-primary" /> Forward
                           </DropdownMenuItem>
                         )}
                         {mine && (
@@ -1292,6 +1292,13 @@ function ChatPage() {
           }}
         />
       )}
+
+      <ForwardModal
+        isOpen={Boolean(forwardingMessage)}
+        onClose={() => setForwardingMessage(null)}
+        message={forwardingMessage}
+        currentUserId={me}
+      />
     </div>
   );
 }
