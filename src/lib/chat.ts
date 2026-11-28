@@ -129,6 +129,24 @@ export async function myId(): Promise<string | null> {
   return data.session?.user.id ?? null;
 }
 
+export async function listDirectoryUsers(limit = 60): Promise<PublicProfile[]> {
+  const me = await myId();
+  let query = supabase
+    .from("profiles")
+    .select("id, username, avatar_url, public_key")
+    .order("username", { ascending: true })
+    .limit(limit);
+  if (me) {
+    query = query.neq("id", me);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.error("Failed to list directory users:", error);
+    return [];
+  }
+  return (data ?? []) as PublicProfile[];
+}
+
 export async function searchPeople(q: string): Promise<PublicProfile[]> {
   const term = q.trim();
   if (!term) return [];
@@ -136,7 +154,7 @@ export async function searchPeople(q: string): Promise<PublicProfile[]> {
   const query = supabase
     .from("profiles")
     .select("id, username, avatar_url, public_key")
-    .ilike("username", `${term}%`)
+    .ilike("username", `%${term}%`)
     .limit(20);
   if (me) {
     query.neq("id", me);
