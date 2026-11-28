@@ -11,6 +11,8 @@ import {
   Copy,
   CornerUpLeft,
   Lock,
+  Unlock,
+  Forward,
   MoreVertical,
   Pencil,
   SendHorizontal,
@@ -59,6 +61,7 @@ import {
   markRead,
   myId,
   sendGroupMessage,
+  toggleMessageLock,
   setGroupOnlyAdminsCanSend,
   setMemberCanSend,
   setMemberRole,
@@ -76,6 +79,7 @@ import {
   cacheDecryptedMedia,
 } from "@/lib/crypto";
 import { PhotoEditorModal } from "@/components/purpose/PhotoEditorModal";
+import { ForwardModal } from "@/components/purpose/ForwardModal";
 import { useBackground } from "@/components/purpose/AppShell";
 import { isDarkBackground } from "@/lib/purpose";
 
@@ -352,6 +356,38 @@ function GroupChatPage() {
   }, [stagedPreviewUrl]);
 
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [menuOpenForMessageId, setMenuOpenForMessageId] = useState<string | null>(null);
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleBubblePointerDown = (msgId: string) => {
+    if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = setTimeout(() => {
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        try { navigator.vibrate?.(40); } catch {}
+      }
+      setMenuOpenForMessageId(msgId);
+    }, 450);
+  };
+
+  const handleBubblePointerUp = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  const handleToggleLock = async (msg: Message) => {
+    try {
+      const locked = await toggleMessageLock(msg.id);
+      toast.success(locked ? "Message locked (forwarding disabled)" : "Message unlocked");
+      setDisplay((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, forward_locked: locked } : m))
+      );
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to update lock status");
+    }
+  };
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [updatingSettings, setUpdatingSettings] = useState(false);
@@ -788,12 +824,27 @@ function GroupChatPage() {
                       )}
                     >
                       <span>{time(m.created_at)}</span>
+                      {m.forward_locked && (
+                        <span
+                          title="Forwarding locked by sender"
+                          className={cn(
+                            "inline-flex items-center gap-0.5 text-[10px] ml-1 font-semibold px-1.5 py-0.2 rounded-full shadow-xs",
+                            isMine ? "bg-black/25 text-primary-foreground" : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                          )}
+                        >
+                          <Lock className="h-2.5 w-2.5 inline" />
+                          <span>Locked</span>
+                        </span>
+                      )}
                       {m.edited_at && <span>(edited)</span>}
                       {isMine && <Check className="h-3 w-3" />}
                     </div>
                   </div>
 
-                  <DropdownMenu>
+                  <DropdownMenu
+                    open={menuOpenForMessageId === m.id}
+                    onOpenChange={(open) => setMenuOpenForMessageId(open ? m.id : null)}
+                  >
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
@@ -807,7 +858,7 @@ function GroupChatPage() {
                           <MoreVertical className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align={isMine ? "end" : "start"} className="w-36 rounded-xl text-xs">
+                      <DropdownMenuContent align={isMine ? "end" : "start"} className="w-44 rounded-xl text-xs">
                         <DropdownMenuItem
                           onClick={() => {
                             void navigator.clipboard.writeText(m.body);
@@ -816,6 +867,34 @@ function GroupChatPage() {
                         >
                           <Copy className="mr-2 h-3.5 w-3.5" /> Copy
                         </DropdownMenuItem>
+
+                        {/* Transfer & Lock options */}
+                        {isMine ? (
+                          <>
+                            <DropdownMenuItem onClick={() => setForwardingMessage(m)}>
+                              <Forward className="mr-2 h-3.5 w-3.5 text-primary" /> Transfer
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => void handleToggleLock(m)}>
+                              {m.forward_locked ? (
+                                <>
+                                  <Unlock className="mr-2 h-3.5 w-3.5 text-emerald-500" /> Unlock Transfer
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="mr-2 h-3.5 w-3.5 text-amber-500" /> Lock Transfer
+                                </>
+                              )}
+                            </DropdownMenuItem>
+                          </>
+                        ) : m.forward_locked ? (
+                          <DropdownMenuItem disabled className="opacity-60 cursor-not-allowed text-muted-foreground">
+                            <Lock className="mr-2 h-3.5 w-3.5 text-amber-500" /> Locked by sender
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem onClick={() => setForwardingMessage(m)}>
+                            <Forward className="mr-2 h-3.5 w-3.5 text-primary" /> Transfer
+                          </DropdownMenuItem>
+                        )}
                         {isMine && (
                           <DropdownMenuItem
                             onClick={() => {
