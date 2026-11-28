@@ -363,8 +363,8 @@ function ChatPage() {
   const handleToggleLock = async (msg: Message) => {
     try {
       const locked = await toggleMessageLock(msg.id);
-      toast.success(locked ? "Message locked (forwarding disabled)" : "Message unlocked");
-      setDisplay((prev) =>
+      toast.success(locked ? "Forwarding locked for this message" : "Forwarding unlocked");
+      setMsgs((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, forward_locked: locked } : m))
       );
     } catch (err: any) {
